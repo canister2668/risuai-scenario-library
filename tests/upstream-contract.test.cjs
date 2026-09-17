@@ -1,0 +1,47 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+
+const root=path.join(__dirname,'..');
+const read=name=>fs.readFileSync(path.join(root,'reference',name),'utf8');
+
+test('stock RisuAI routes the input-side menu through the chat location',()=>{
+  const api=read('v3.svelte.ts');
+  const chat=read('DefaultChatScreen.svelte');
+  assert.match(api,/case 'chat':\s*{\s*additionalChatMenu\.push\(menuDef\)/);
+  assert.match(api,/removeFromMenuStore\(additionalChatMenu\)/);
+  assert.match(chat,/{#each additionalChatMenu as menu}/);
+  assert.match(chat,/<PluginDefinedIcon ico={menu} \/>/);
+  assert.match(chat,/<span class="ml-2">{menu\.name}<\/span>/);
+});
+
+test('stock RisuAI preserves the SVG badge in its 20px plugin icon slot',()=>{
+  const icon=read('PluginDefinedIcon.svelte');
+  assert.match(icon,/DOMPurify\.sanitize\(icon/);
+  assert.match(icon,/FORBID_TAGS:\s*\['script', 'style', 'iframe', 'object', 'embed'\]/);
+  assert.doesNotMatch(icon,/FORBID_TAGS:[^\n]*['"]svg['"]/);
+  assert.match(icon,/"w-5 h-5": !className/);
+});
+
+test('the distributable uses only declared stock API v3 surfaces',()=>{
+  const declarations=read('risuai.d.ts');
+  const source=fs.readFileSync(path.join(root,'src','app.js'),'utf8')+'\n'+fs.readFileSync(path.join(root,'src','core.js'),'utf8');
+  const used=[...source.matchAll(/\bapi\.([A-Za-z_$][\w$]*)/g)].map(match=>match[1]);
+  const expected=[...new Set(used)].sort();
+  assert.deepEqual(expected,[
+    'getCharacter','getCharacterFromIndex','getChatFromIndex','getCurrentCharacterIndex',
+    'getCurrentChatIndex','getDatabase','hideContainer','onUnload','pluginStorage',
+    'registerButton','registerSetting','setChatToIndex','setDatabaseLite','showContainer',
+    'unregisterUIPart'
+  ]);
+  for(const name of expected){
+    if(name==='pluginStorage') assert.match(declarations,/pluginStorage:\s*PluginStorage;/);
+    else assert.match(declarations,new RegExp('\\b'+name+'\\s*(?:\\(|:)'),name+' must be declared by stock API v3');
+  }
+  const plugin=fs.readFileSync(path.join(root,'dist','scenario-library.plugin.js'),'utf8');
+  const version=require('../package.json').version;
+  assert.match(plugin,new RegExp('^//\\@name scenario_library\\n//\\@display-name 상황극 탐색기\\n//\\@api 3\\.0\\n//\\@version '+version.replace(/\\./g,'\\\\.')+'\\n'));
+  assert.match(plugin,/\/\/@update-url https:\/\/raw\.githubusercontent\.com\/canister2668\/risuai-scenario-library\/main\/update\/scenario-library\.plugin\.js\n/);
+  assert.equal(plugin,fs.readFileSync(path.join(root,'update','scenario-library.plugin.js'),'utf8'));
+});

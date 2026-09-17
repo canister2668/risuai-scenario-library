@@ -1,0 +1,17 @@
+{
+  "name": "risuai-scenario-library",
+  "version": "1.0.0",
+  "private": true,
+  "description": "RisuAI 상황극 탐색기와 상황극 서고",
+  "scripts": {
+    "build": "node build.cjs",
+    "test": "node --test tests/core.test.cjs tests/upstream-contract.test.cjs",
+    "test:browser": "node tests/browser.cjs && node tests/full-import.cjs",
+    "release:prepare": "node tools/prepare-release.cjs"
+  },
+  "devDependencies": {
+    "dompurify": "3.4.14",
+    "parse5": "8.0.1",
+    "playwright": "1.62.1"
+  }
+}

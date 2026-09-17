@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/kwaroran/RisuAI",
+  "ref": "refs/heads/main",
+  "sha": "d31fea55384ef5e1bd78ffc813e40d8d144edce7",
+  "verifiedAt": "2026-09-17",
+  "paths": {
+    "risuai.d.ts": "src/ts/plugins/apiV3/risuai.d.ts",
+    "v3.svelte.ts": "src/ts/plugins/apiV3/v3.svelte.ts",
+    "DefaultChatScreen.svelte": "src/lib/ChatScreens/DefaultChatScreen.svelte",
+    "PluginDefinedIcon.svelte": "src/lib/Others/PluginDefinedIcon.svelte"
+  }
+}

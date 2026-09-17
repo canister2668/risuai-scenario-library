@@ -1,0 +1,52 @@
+name: Verify and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Verify generated update file
+        run: git diff --exit-code -- update/scenario-library.plugin.js
+      - name: Test stock API contract and core
+        run: npm test
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Test browser flows
+        run: npm run test:browser
+      - name: Match tag and package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          test "${GITHUB_REF_NAME}" = "v${version}"
+      - name: Prepare release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: npm run release:prepare
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" release/scenario-library.plugin.js release/SHA256SUMS --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" release/scenario-library.plugin.js release/SHA256SUMS --verify-tag --generate-notes --title "상황극 탐색기 ${GITHUB_REF_NAME}"
+          fi

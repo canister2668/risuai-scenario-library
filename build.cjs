@@ -1,0 +1,26 @@
+const fs=require('node:fs'),path=require('node:path');
+const root=__dirname,read=p=>fs.readFileSync(path.join(root,p),'utf8');
+const pkg=JSON.parse(read('package.json'));
+const seed=JSON.parse(read('src/seed.json'));
+const UPDATE_URL='https://raw.githubusercontent.com/canister2668/risuai-scenario-library/main/update/scenario-library.plugin.js';
+const make=(version,bundledSeed,updateURL='')=>'//@name scenario_library\n//@display-name 상황극 탐색기\n//@api 3.0\n//@version '+version+'\n'+(updateURL?'//@update-url '+updateURL+'\n':'')+'\n'+read('src/core.js')+'\n{\nconst STYLE = '+JSON.stringify(read('src/style.css'))+';\nconst SCENARIO_SEED = '+JSON.stringify(bundledSeed)+';\n'+read('src/app.js')+'\n}\n';
+const output=make(pkg.version,seed,UPDATE_URL);
+fs.writeFileSync(path.join(root,'dist/scenario-library.plugin.js'),output);
+fs.mkdirSync(path.join(root,'update'),{recursive:true});
+fs.writeFileSync(path.join(root,'update/scenario-library.plugin.js'),output);
+const runtime=make(pkg.version,{format:'scenario-library-seed',version:seed.version,sourceFile:seed.sourceFile,count:0,entries:[]});
+fs.writeFileSync(path.join(root,'dist/scenario-library-runtime.plugin.js'),runtime);
+require(path.join(root,'src/core.js'));
+const fullModule=globalThis.ScenarioCore.newModule(seed);
+fullModule.scenarioLibraryStorage='module:canonical;pluginStorage:cache:v3';
+const contents=[];
+const catalog=JSON.parse(JSON.stringify(fullModule));
+for(const item of catalog.lorebook){if(item.mode!=='folder'){contents.push({key:'scenario.v2.content.'+item.id,value:item.content});item.content='';}}
+catalog.scenarioLibraryStorage='module:canonical;pluginStorage:cache:v3';
+fs.writeFileSync(path.join(root,'dist/scenario-library.module.json'),JSON.stringify(fullModule));
+fs.writeFileSync(path.join(root,'dist/scenario-library.storage.json'),JSON.stringify({catalog,contents}));
+console.log('Built dist/scenario-library.plugin.js ('+Buffer.byteLength(output)+' bytes)');
+console.log('Built update/scenario-library.plugin.js ('+Buffer.byteLength(output)+' bytes)');
+console.log('Built dist/scenario-library-runtime.plugin.js ('+Buffer.byteLength(runtime)+' bytes)');
+console.log('Built dist/scenario-library.module.json ('+Buffer.byteLength(JSON.stringify(fullModule))+' bytes)');
+console.log('Built dist/scenario-library.storage.json ('+Buffer.byteLength(JSON.stringify({catalog,contents}))+' bytes)');
