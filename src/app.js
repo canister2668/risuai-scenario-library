@@ -76,14 +76,14 @@
   }
   const repo = new CatalogRepository();
   const PAGE_STEP = 30;
-  const state = {mod:null, prefs:{favorites:[],recent:[],lastFolder:'',sort:'newest',adult:'all',targets:[]},
-    context:'none', mode:false,target:'',
+  const state = {mod:null, prefs:{favorites:[],recent:[],lastFolder:'',sort:'newest',adult:'all',targets:[],searches:[],cleanMode:'off'},
+    context:'none', mode:false,target:'',cart:[],
     page:'list', filter:'all', query:'', shown:PAGE_STEP, selected:null, draft:null, compose:'', undo:null, busy:false,
     importItems:null,importCoverage:null,importQuery:'',importView:'candidates',importSearchBody:false,importPage:0,importFolder:''};
   const registrations=[];
   let databasePermission=typeof api.requestPluginPermission!=='function';
   let pendingAdd=null;
-  // One-shot instructions queued for removal once the model has replied.
+  // One-shot instructions queued for resolution once the model has replied.
   const PENDING_CLEAN_KEY='scenario.v1.pending-clean';
   const canAutoClean=typeof api.addRisuChatListener==='function';
   let pendingClean=[],cleaning=false;
@@ -95,9 +95,9 @@
     cleaning=true;
     try{
       for(const p of pendingClean.filter(x=>x.key===key)){
-        const result=await C.removeUserMessage(api,event.characterIndex,event.chatIndex,p.key,p.messageId);
+        const result=await C.resolveOneShot(api,event.characterIndex,event.chatIndex,p.key,p.messageId,{mode:p.mode,label:p.label});
         // 'waiting'/'busy'/'moved' keep the entry for the next output event.
-        if(result.removed||result.reason==='missing')pendingClean=pendingClean.filter(x=>x!==p);
+        if(result.resolved||result.reason==='missing'||result.reason==='off')pendingClean=pendingClean.filter(x=>x!==p);
       }
       await savePendingClean();
     }catch(e){console.warn('[scenario-library] auto-clean',e);}
@@ -139,7 +139,7 @@
   function scheduleDraft(){clearTimeout(draftTimer);draftTimer=setTimeout(()=>saveDraft().catch(error),600);}
   // A character without an open chat must still allow browsing the library.
   async function context(){try{if(!(await api.getCharacter())?.chaId)return 'none';return (await C.chatContext(api)).key;}catch(e){return 'none';}}
-  function rememberMode(){return store('scenario.v1.context.'+state.context,{mode:state.mode,target:state.target,compose:state.compose});}
+  function rememberMode(){return store('scenario.v1.context.'+state.context,{mode:state.mode,target:state.target,compose:state.compose,cart:state.cart});}
   async function openSource(event,url){
     event.preventDefault();
     const popup=globalThis.open(url,'_blank','noopener,noreferrer');
@@ -167,14 +167,17 @@
     try{
       state.mod=await repo.initialize();
       const prefs=await load('scenario.v1.preferences',{});
-      state.prefs={favorites:[],recent:[],lastFolder:'',sort:'newest',adult:'all',targets:[],autoClean:false,...prefs};
-      for(const key of ['favorites','recent','targets']) if(!Array.isArray(state.prefs[key]))state.prefs[key]=[];
-      state.prefs.autoClean=state.prefs.autoClean===true;
+      state.prefs={favorites:[],recent:[],lastFolder:'',sort:'newest',adult:'all',targets:[],searches:[],cleanMode:'off',...prefs};
+      for(const key of ['favorites','recent','targets','searches']) if(!Array.isArray(state.prefs[key]))state.prefs[key]=[];
+      // 1.1.0 shipped a boolean toggle; it maps onto the explicit removal mode.
+      state.prefs.cleanMode=C.oneShotMode(state.prefs.cleanMode||(prefs.autoClean===true?'remove':'off'));
+      delete state.prefs.autoClean;
       if(!['newest','title','oldest'].includes(state.prefs.sort))state.prefs.sort='newest';
       if(!['all','hide','only'].includes(state.prefs.adult))state.prefs.adult='all';
       state.context=await context();state.undo=null;pendingAdd=null;
       const saved=await load('scenario.v1.context.'+state.context,{});
       state.mode=!!saved.mode;state.target=typeof saved.target==='string'?saved.target:'';state.compose=typeof saved.compose==='string'?saved.compose:'';
+      state.cart=Array.isArray(saved.cart)?saved.cart.filter(x=>x&&typeof x.text==='string').slice(0,30):[];
       state.draft=await load('scenario.v1.draft',null);state.page='list';state.selected=null;state.shown=PAGE_STEP;lastPage=null;
       // A stale search reads as an empty library on reopen; the folder does not.
       state.query='';
@@ -192,7 +195,8 @@
     listObserver?.disconnect();listObserver=null;
     root.replaceChildren();
     if(state.page==='edit')renderEdit();else if(state.page==='detail')renderDetail();
-    else if(state.page==='compose')renderCompose();else if(state.page==='import')renderImport();else renderList();
+    else if(state.page==='compose')renderCompose();else if(state.page==='import')renderImport();
+    else if(state.page==='cart')renderCart();else renderList();
     errorBox.hidden=true;
     if(lastPage!==state.page){lastPage=state.page;const heading=root.querySelector('.top-title');if(heading){heading.setAttribute('tabindex','-1');heading.focus({preventScroll:true});}scrollTo(0,0);}
   }
@@ -266,14 +270,25 @@
   /* ---------- list ---------- */
   function renderList(){
     const menu=iconButton('⋯','더보기 메뉴',()=>openMenu());
-    root.append(shell('상황극 탐색기',null,[iconButton('＋','직접 저장',()=>edit(null)),menu,exitButton()]));
+    const cart=state.cart.length?iconButton(`◫${state.cart.length}`,`담은 상황극 ${state.cart.length}개`,()=>goto('cart'),'cart-badge'):null;
+    root.append(shell('상황극 탐색기',null,[cart,iconButton('＋','직접 저장',()=>edit(null)),menu,exitButton()].filter(Boolean)));
     root.append(errorBox);
 
     const search=el('input',{type:'search',placeholder:'제목·줄거리 검색','aria-label':'상황극 검색',enterkeyhint:'search',autocomplete:'off'});search.value=state.query;
     const clear=iconButton('×','검색어 지우기',()=>{state.query='';search.value='';state.shown=PAGE_STEP;search.focus();refresh();},'clear');
     clear.hidden=!state.query;
     const searchRow=el('div',{class:'search'},search,clear);
-    root.append(el('div',{class:'sticky'},searchRow));
+    // Recent searches only help while the box is empty; once there is a query the
+    // result list is the better feedback.
+    const history=el('div',{class:'chips history','aria-label':'최근 검색어'});
+    const drawHistory=()=>{
+      history.replaceChildren();
+      const terms=state.prefs.searches.filter(Boolean).slice(0,5);
+      history.hidden=!terms.length||Boolean(state.query.trim());
+      for(const term of terms)history.append(button(term,()=>{state.query=term;search.value=term;state.shown=PAGE_STEP;refresh();drawHistory();search.focus();},'chip history-chip'));
+      if(terms.length)history.append(button('기록 지우기',()=>{state.prefs.searches=[];savePrefs().catch(error);drawHistory();},'link'));
+    };
+    root.append(el('div',{class:'sticky'},searchRow,history));
 
     const chips=el('nav',{class:'chips scroller','aria-label':'상황극 분류'});
     const all=C.entries(state.mod);
@@ -303,7 +318,7 @@
     const adult=el('select',{'aria-label':'19금 표시',class:'mini'},el('option',{value:'all'},'19금 포함'),el('option',{value:'hide'},'19금 숨김'),el('option',{value:'only'},'19금만'));
     adult.value=state.prefs.adult;
     const list=el('div',{class:'list'}),more=el('div',{class:'more'});
-    const refresh=()=>{clear.hidden=!state.query;fillList(list,count,more);};
+    const refresh=()=>{clear.hidden=!state.query;drawHistory();fillList(list,count,more);};
     let searchTimer;
     search.addEventListener('input',()=>{state.query=search.value;state.shown=PAGE_STEP;clearTimeout(searchTimer);searchTimer=setTimeout(refresh,90);});
     sort.addEventListener('change',()=>{state.prefs.sort=sort.value;state.shown=PAGE_STEP;savePrefs().catch(error);refresh();});
@@ -379,8 +394,13 @@
     }
     load.textContent=`＋ ${Math.min(PAGE_STEP,rest)}개 더 보기 (남은 ${rest}개)`;
   }
+  function noteSearch(){
+    const term=state.query.trim();if(term.length<2)return Promise.resolve();
+    state.prefs.searches=[term,...state.prefs.searches.filter(x=>x!==term)].slice(0,5);
+    return savePrefs();
+  }
   function listRow(item,after){
-    const pick=el('button',{type:'button',class:'pick',onClick:()=>run(async()=>{const content=await repo.content(item);const expected={...C.clone(item),content};state.selected={...expected,_catalogExpected:C.clone(expected)};goto('detail');})});
+    const pick=el('button',{type:'button',class:'pick',onClick:()=>run(async()=>{const content=await repo.content(item);const expected={...C.clone(item),content};state.selected={...expected,_catalogExpected:C.clone(expected)};await noteSearch();goto('detail');})});
     const subtitle=subtitleOf(item),meta=metaOf(item);
     pick.append(el('span',{class:'r-title'},display(item.comment)));
     if(subtitle)pick.append(el('span',{class:'r-sum'},display(subtitle)));
@@ -393,6 +413,7 @@
       ['＋ 폴더 추가',()=>addFolder()],
       C.folders(state.mod).some(f=>f.key===state.filter)?['폴더 이름 변경',renameFolder]:null,
       ['작성 중인 인풋카드',()=>goto('compose')],
+      state.cart.length?[`담은 상황극 ${state.cart.length}개`,()=>goto('cart')]:null,
       ['JSON 가져오기',chooseImport],
       ['보관함 백업',backup],
       ['모듈에서 새로고침',refreshFromModule],
@@ -481,6 +502,7 @@
     const preview=el('pre',{class:'preview',tabindex:'0','aria-label':'채팅에 들어갈 본문'});
     const hint=el('p',{class:'muted mode-hint'});
     const input=inputOf(item),tokens=(input.match(/\{\{char\}\}/gi)||[]).length;
+    const size=el('span',{class:'size-note muted'});
     const expand=button('전체 보기',()=>{preview.classList.toggle('open');expand.textContent=preview.classList.contains('open')?'접기':'전체 보기';},'link');
     const update=()=>{
       preview.textContent=state.mode&&!state.target.trim()?input:C.convert(input,state.mode,state.target);
@@ -488,6 +510,7 @@
         :!state.target.trim()?'대상 이름을 입력하면 {{char}}가 바뀝니다.'
         :`{{char}} ${tokens}곳이 ‘${state.target.trim()}’${ro(state.target.trim())} 바뀝니다.`;
       for(const node of root.querySelectorAll('.detail-title,.top-title'))node.textContent=display(item.comment);
+      size.textContent=`${preview.textContent.length}자 · 약 ${C.estimateTokens(preview.textContent).toLocaleString('ko')}토큰`;
     };
     const controls=modeControls(update);
     const source=item.scenarioLibrarySource;
@@ -501,7 +524,7 @@
       el('h2',{class:'detail-title'},display(item.comment)),meta,
       el('section',{class:'story-summary','aria-label':'간략한 상황극 줄거리'},el('strong',{},'줄거리'),el('p',{},display(subtitle))),
       controls,hint,
-      el('div',{class:'preview-wrap'},el('div',{class:'row space'},el('strong',{class:'preview-title'},'채팅에 들어갈 본문'),expand),preview)));
+      el('div',{class:'preview-wrap'},el('div',{class:'row space'},el('strong',{class:'preview-title'},'채팅에 들어갈 본문'),el('div',{class:'row'},size,expand)),preview)));
     update();
 
     const busyGuard=fn=>async()=>{rememberTarget();await savePrefs();await rememberMode();await fn();};
@@ -512,7 +535,15 @@
     });
     const addNow=busyGuard(async()=>{
       const content=C.convert(input,state.mode,state.target);
-      await commitToChat(content);noteRecent(item);await savePrefs();
+      await commitToChat(content,item.comment);noteRecent(item);await savePrefs();
+    });
+    const addToCart=busyGuard(async()=>{
+      const content=C.convert(input,state.mode,state.target);
+      if(state.cart.some(row=>row.text===content))throw new Error('이미 담긴 상황극입니다.');
+      if(state.cart.length>=30)throw new Error('한 번에 30개까지만 담을 수 있습니다.');
+      state.cart=[...state.cart,{id:item.id,title:item.comment,text:content}];
+      noteRecent(item);await savePrefs();await rememberMode();render();
+      toast(`담았습니다. 현재 ${state.cart.length}개.`);
     });
     const bar=el('footer',{class:'bar'});
     if(state.context==='none'){
@@ -522,45 +553,58 @@
     }else{
       bar.append(button('채팅에 추가',addNow,'primary'),button('다듬기',toCompose));
     }
-    const clean=cleanToggle();if(clean)root.append(clean);
+    if(state.context!=='none')bar.append(button(state.cart.length?`담기 (${state.cart.length})`:'담기',addToCart,'link'));
+    const clean=cleanControls();if(clean)root.append(clean);
     root.append(bar);
   }
   function noteRecent(item){state.prefs.recent=[item.id,...state.prefs.recent.filter(id=>id!==item.id)].slice(0,30);}
-  async function commitToChat(content){
+  async function commitToChat(content,label=''){
     if(!pendingAdd || pendingAdd.content!==content || pendingAdd.context!==state.context)
       pendingAdd={id:crypto.randomUUID(),content,context:state.context};
     await C.addUserMessage(api,state.context,content,pendingAdd.id);
-    const autoClean=canAutoClean&&state.prefs.autoClean;
-    if(autoClean){
-      pendingClean=[...pendingClean.filter(p=>p.messageId!==pendingAdd.id),{key:state.context,messageId:pendingAdd.id,addedAt:Date.now()}].slice(-20);
+    const mode=canAutoClean?C.oneShotMode(state.prefs.cleanMode):'off';
+    if(mode!=='off'){
+      pendingClean=[...pendingClean.filter(p=>p.messageId!==pendingAdd.id),
+        {key:state.context,messageId:pendingAdd.id,addedAt:Date.now(),mode,label:String(label||'').slice(0,120)}].slice(-20);
       // The message is already committed; a failed queue write only loses the cleanup.
       try{await savePendingClean();}catch(e){console.warn('[scenario-library] auto-clean queue',e);}
     }
-    state.compose='';state.undo=null;pendingAdd=null;
+    state.compose='';state.undo=null;pendingAdd=null;state.cart=[];
     // A committed message must not be presented as failed just because preference storage failed.
     try{await rememberMode();}catch(e){console.warn('[scenario-library] draft cleanup',e);}
     await api.hideContainer();
     state.page='list';lastPage=null;render();
-    toast(autoClean?'유저 메시지로 추가했습니다. 응답이 도착하면 지침 메시지는 자동으로 지워집니다.':'유저 메시지로 추가했습니다. 전송 버튼으로 응답을 이어가세요.');
+    toast(ONE_SHOT_TOAST[mode]||'유저 메시지로 추가했습니다. 전송 버튼으로 응답을 이어가세요.');
   }
-  // One-shot toggle: after the model replies, the instruction message is removed
-  // so it stops being resent with every following request.
-  function cleanToggle(){
+  const ONE_SHOT_TOAST={off:'유저 메시지로 추가했습니다. 전송 버튼으로 응답을 이어가세요.',
+    remove:'유저 메시지로 추가했습니다. 응답이 도착하면 지침 메시지는 자동으로 지워집니다.',
+    mark:'유저 메시지로 추가했습니다. 응답이 도착하면 지침 앞에 [완료] 표시가 붙습니다.',
+    collapse:'유저 메시지로 추가했습니다. 응답이 도착하면 지침은 한 줄 기록으로 줄어듭니다.'};
+  const ONE_SHOT_OPTIONS=[['off','그대로 두기','지침이 채팅에 남아 이후 요청에도 함께 전송됩니다.'],
+    ['remove','삭제','지침 메시지를 채팅에서 지웁니다. 문맥에서 완전히 사라집니다.'],
+    ['mark','[완료] 표시','본문은 남기고 앞에 [완료]만 붙입니다. 나중에 직접 지울 수 있습니다.'],
+    ['collapse','한 줄로 줄이기','‘[지침 적용됨: 제목]’ 한 줄만 남겨 어떤 상황극이었는지 기록합니다.']];
+  // One-shot handling: what happens to the instruction message once the model
+  // has replied to it, so it stops being resent with every following request.
+  function cleanControls(){
     if(state.context==='none'||!canAutoClean)return null;
-    const box=el('input',{type:'checkbox','aria-label':'응답 후 지침 자동 삭제'});box.checked=!!state.prefs.autoClean;
-    box.addEventListener('change',()=>{state.prefs.autoClean=box.checked;savePrefs().catch(error);});
-    return el('label',{class:'clean-toggle'},box,
-      el('span',{class:'clean-copy'},el('strong',{},'응답 후 지침 자동 삭제 (일회용)'),
-        el('small',{},'응답이 도착하면 방금 넣은 지침 메시지를 채팅에서 지웁니다. 지침이 이후 요청마다 다시 전송되지 않습니다.')));
+    const select=el('select',{'aria-label':'응답 후 지침 처리'});
+    for(const [value,name] of ONE_SHOT_OPTIONS){const option=el('option',{value},name);option.selected=state.prefs.cleanMode===value;select.append(option);}
+    const hint=el('small',{});
+    const sync=()=>{hint.textContent=(ONE_SHOT_OPTIONS.find(([value])=>value===state.prefs.cleanMode)||ONE_SHOT_OPTIONS[0])[2];};
+    select.addEventListener('change',()=>{state.prefs.cleanMode=C.oneShotMode(select.value);sync();savePrefs().catch(error);});
+    sync();
+    return el('div',{class:'clean-row'+(state.prefs.cleanMode==='off'?'':' on')},
+      el('div',{class:'clean-copy'},el('strong',{},'응답 후 지침 처리 (일회용)'),hint),select);
   }
-
   /* ---------- compose ---------- */
   function renderCompose(){
     root.append(shell('인풋카드',iconButton('←','보관함으로',()=>goto('list'),'back'),[exitButton()]));
     root.append(errorBox);
     const text=el('textarea',{class:'compose-area','aria-label':'인풋카드 본문',placeholder:'선택한 상황극이 여기에 들어갑니다.'});text.value=state.compose;
     const counter=el('p',{class:'muted counter','aria-live':'polite'});
-    const count=()=>{counter.textContent=`${text.value.length}자`;};count();
+    // A rough token figure is what actually predicts context cost; characters alone hide it.
+    const count=()=>{counter.textContent=`${text.value.length}자 · 약 ${C.estimateTokens(text.value).toLocaleString('ko')}토큰 (추정)`;};count();
     text.addEventListener('input',()=>{state.compose=text.value;count();});
     text.addEventListener('change',()=>rememberMode().catch(error));
     const copy=async()=>{
@@ -586,11 +630,51 @@
       text,el('div',{class:'row space'},counter,el('div',{class:'row'},undo,clear))));
     const bar=el('footer',{class:'bar'});
     if(state.context==='none')bar.append(el('span',{class:'muted grow'},'채팅을 열면 추가할 수 있습니다.'),button('복사',copy));
-    else bar.append(button('채팅에 추가',()=>commitToChat(text.value),'primary'),button('복사',copy),button('＋ 더 고르기',()=>goto('list'),'link'));
-    const clean=cleanToggle();if(clean)root.append(clean);
+    else bar.append(button('채팅에 추가',()=>commitToChat(text.value,composeLabel()),'primary'),button('복사',copy),button('＋ 더 고르기',()=>goto('list'),'link'));
+    const clean=cleanControls();if(clean)root.append(clean);
     root.append(bar);
   }
 
+  // The cart is a staging list: several scenarios merged in a chosen order,
+  // which the single-append flow could not express.
+  function composeLabel(){
+    if(state.cart.length)return state.cart.map(row=>row.title).join(' + ').slice(0,120);
+    return state.selected?state.selected.comment:'';
+  }
+  function saveCart(){return rememberMode();}
+  function renderCart(){
+    root.append(shell(`담은 상황극 ${state.cart.length}개`,iconButton('←','보관함으로',()=>goto('list'),'back'),[exitButton()]));
+    root.append(errorBox);
+    const list=el('div',{class:'cart-list'});
+    const move=async(index,step)=>{
+      const next=[...state.cart],[row]=next.splice(index,1);next.splice(Math.max(0,Math.min(next.length,index+step)),0,row);
+      state.cart=next;await saveCart();render();
+    };
+    const drop=async index=>{state.cart=state.cart.filter((_,i)=>i!==index);await saveCart();render();};
+    state.cart.forEach((row,index)=>{
+      const up=iconButton('↑','위로 옮기기',()=>move(index,-1));up.disabled=index===0;
+      const down=iconButton('↓','아래로 옮기기',()=>move(index,1));down.disabled=index===state.cart.length-1;
+      list.append(el('article',{class:'cart-row'},
+        el('span',{class:'cart-order'},String(index+1)),
+        el('div',{class:'cart-body'},el('strong',{},display(row.title)),
+          el('span',{class:'muted'},`${row.text.length}자 · 약 ${C.estimateTokens(row.text).toLocaleString('ko')}토큰`)),
+        el('div',{class:'cart-actions'},up,down,iconButton('×','담은 목록에서 빼기',()=>drop(index)))));
+    });
+    const merged=state.cart.map(row=>row.text).join('\n\n');
+    root.append(el('section',{class:'panel'},
+      state.cart.length?el('p',{class:'muted'},'위에서 아래 순서로 하나의 인풋카드에 합쳐집니다.')
+        :el('div',{class:'empty'},el('h2',{},'담은 상황극이 없습니다'),el('p',{class:'muted'},'상세 화면의 ‘담기’로 여러 상황극을 모을 수 있습니다.'),button('보관함으로',()=>goto('list'),'primary')),
+      state.cart.length?list:null,
+      state.cart.length?el('p',{class:'muted'},`합계 ${merged.length}자 · 약 ${C.estimateTokens(merged).toLocaleString('ko')}토큰 (추정)`):null,
+      state.cart.length?button('담은 목록 비우기',async()=>{if(await confirmAction('담은 상황극을 모두 뺄까요?','비우기')){state.cart=[];await saveCart();render();}},'link'):null));
+    if(!state.cart.length)return;
+    const toCard=async()=>{
+      const before=state.compose;state.compose=C.append(state.compose,merged);state.undo={before,after:state.compose};
+      await rememberMode();goto('compose');
+    };
+    root.append(el('footer',{class:'bar'},button('인풋카드에 합치기',toCard,'primary'),
+      state.context==='none'?null:button('바로 채팅에 추가',()=>commitToChat(merged,composeLabel()))));
+  }
   /* ---------- dialogs ---------- */
   async function ask(title,initial=''){
     return new Promise(resolve=>{
@@ -609,6 +693,15 @@
       dialog.addEventListener('close',()=>{dialog.remove();resolve(yes);});document.body.append(dialog);dialog.showModal();
     });
   }
+  async function pickOption(title,options){
+    return new Promise(resolve=>{
+      const dialog=el('dialog',{class:'dialog sheet','aria-label':title});let answer=null;
+      const body=el('div',{class:'sheet-body'},el('h2',{},title));
+      for(const [value,name] of options)body.append(el('button',{type:'button',onClick:()=>{answer=value;dialog.close();}},name));
+      body.append(el('button',{type:'button',class:'link',onClick:()=>dialog.close()},'취소'));
+      dialog.append(body);dialog.addEventListener('close',()=>{dialog.remove();resolve(answer);});document.body.append(dialog);dialog.showModal();
+    });
+  }
   async function addFolder(redraw=true){
     const name=await ask('새 폴더 이름');if(!name)return;
     const f=C.folder(name,crypto.randomUUID());
@@ -623,9 +716,25 @@
       if(!actual||actual.comment!==f.comment)throw new Error('폴더가 변경되었습니다. 다시 열어 주세요.');
       if(C.folders(mod).some(x=>x.key!==f.key&&x.comment===name))throw new Error('같은 이름의 폴더가 있습니다.');actual.comment=name;return mod;});render();
   }
+  // Backup scopes: the whole library, the starred subset, or the folder in view.
   async function backup(){
     const mod=await repo.export();if(!mod)throw new Error('보관함을 찾지 못했습니다.');
-    const a=el('a',{download:'scenario-library-backup.json'}),url=URL.createObjectURL(new Blob([JSON.stringify(mod,null,2)],{type:'application/json'}));a.href=url;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),3000);toast('보관함 JSON 백업을 다운로드합니다.');
+    const folder=C.folders(state.mod).find(f=>f.key===state.filter);
+    const scopes=[['all','전체 보관함',()=>mod,'scenario-library-backup.json']];
+    if(state.prefs.favorites.length){
+      const starred=new Set(state.prefs.favorites);
+      scopes.push(['favorites',`즐겨찾기 ${C.entries(mod).filter(item=>starred.has(item.id)).length}개`,
+        ()=>C.filterModule(mod,item=>starred.has(item.id)),'scenario-library-favorites.json']);
+    }
+    if(folder)scopes.push(['folder',`현재 폴더 · ${folder.comment}`,
+      ()=>C.filterModule(mod,item=>item.folder===folder.key),`scenario-library-${folder.comment}.json`]);
+    const chosen=scopes.length>1?await pickOption('백업 범위 고르기',scopes.map(([value,name])=>[value,name])):'all';
+    if(!chosen)return;
+    const [,,build,filename]=scopes.find(([value])=>value===chosen);
+    const payload=build(),total=C.entries(payload).length;
+    if(!total)throw new Error('이 범위에 저장할 상황극이 없습니다.');
+    const a=el('a',{download:filename}),url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));a.href=url;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),3000);
+    toast(`${total}개를 담은 보관함 JSON을 내려받습니다.`);
   }
   async function refreshFromModule(){state.mod=await repo.refresh();state.shown=PAGE_STEP;state.selected=null;state.page='list';render();toast('상황극 서고 모듈에서 목록과 본문 캐시를 새로 읽었습니다.');}
   const formatBytes=bytes=>bytes<1024?`${bytes} B`:bytes<1024*1024?`${(bytes/1024).toFixed(1)} KB`:`${(bytes/1024/1024).toFixed(2)} MB`;
@@ -635,7 +744,7 @@
     const cache=async()=>{if(!await confirmAction('목록 캐시를 비울까요? 모듈은 그대로이며 다음 실행 때 자동으로 복구됩니다.','캐시 비우기'))return;
       await repo.clearCache();close();toast('목록 캐시를 비웠습니다. 다음 실행 때 자동 복구됩니다.');};
     const all=async()=>{if(!await confirmAction('즐겨찾기·최근 기록·초안·대상 이름과 캐시를 모두 비울까요? 상황극 서고 모듈은 삭제되지 않습니다.','전체 비우기'))return;
-      await repo.clearAll();state.prefs={favorites:[],recent:[],lastFolder:'',sort:'newest',adult:'all',targets:[],autoClean:false};state.draft=null;pendingClean=[];close();toast('플러그인 저장소를 비웠습니다. 모듈은 그대로 보존됩니다.');render();};
+      await repo.clearAll();state.prefs={favorites:[],recent:[],lastFolder:'',sort:'newest',adult:'all',targets:[],searches:[],cleanMode:'off'};state.draft=null;pendingClean=[];state.cart=[];close();toast('플러그인 저장소를 비웠습니다. 모듈은 그대로 보존됩니다.');render();};
     dialog.append(el('h2',{},'플러그인 저장소'),
       el('div',{class:'storage-meter'},el('strong',{},formatBytes(usage.bytes)),el('span',{class:'muted'},`${usage.keys}개 항목`)),
       el('dl',{class:'storage-breakdown'},el('div',{},el('dt',{},'목록·출처 메타데이터'),el('dd',{},formatBytes(usage.catalogBytes))),

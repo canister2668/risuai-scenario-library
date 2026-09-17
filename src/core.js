@@ -215,29 +215,73 @@
       throw new Error('추가 결과를 확인하지 못했습니다. 채팅을 확인한 뒤 다시 시도해 주세요.');
     return {duplicate:false};
   }
-  // One-shot instructions: remove the plugin's own user message once a model
+  // Rough token estimate for the input card. Modern BPE vocabularies split
+  // Hangul and CJK far more finely than Latin text, so a single chars/4 rule
+  // understates Korean prompts by roughly a factor of three. This stays a
+  // labelled estimate; no tokenizer ships with the plugin.
+  function estimateTokens(value) {
+    const text=String(value||'');
+    if(!text)return 0;
+    let cjk=0,latin=0,other=0;
+    for(const ch of text){
+      const code=ch.codePointAt(0);
+      if((code>=0x1100&&code<=0x11FF)||(code>=0x3130&&code<=0x318F)||(code>=0xAC00&&code<=0xD7A3)||
+         (code>=0x3040&&code<=0x30FF)||(code>=0x4E00&&code<=0x9FFF)||(code>=0xF900&&code<=0xFAFF))cjk+=1;
+      else if((code>=0x41&&code<=0x5A)||(code>=0x61&&code<=0x7A)||(code>=0x30&&code<=0x39))latin+=1;
+      else other+=1;
+    }
+    return Math.max(1,Math.round(cjk/1.4+latin/4+other/3));
+  }
+  const ONE_SHOT_MODES=['off','remove','mark','collapse'];
+  const MARK_PREFIX='[완료] ';
+  function oneShotMode(value) {return ONE_SHOT_MODES.includes(value)?value:'off';}
+  // What a resolved one-shot instruction turns into. 'remove' drops the message,
+  // 'mark' keeps the text behind a marker, 'collapse' leaves a single line so the
+  // transcript still records which scenario ran.
+  function oneShotResult(mode, data, label='') {
+    const name=String(label||'').trim();
+    // 'mark' must stay idempotent: an already marked message returns unchanged so
+    // the caller's no-op check skips the write. null is reserved for removal.
+    if(mode==='mark'){const text=String(data||'');return text.startsWith(MARK_PREFIX)?text:MARK_PREFIX+text;}
+    if(mode==='collapse')return name?`[지침 적용됨: ${name}]`:'[지침 적용됨]';
+    return null;
+  }
+  // One-shot instructions: resolve the plugin's own user message once a model
   // reply exists after it. Uses stored ci/ti so it works even when the user has
   // navigated elsewhere, and follows the same read-verify-write discipline.
-  async function removeUserMessage(api, ci, ti, expectedKey, messageId) {
+  async function resolveOneShot(api, ci, ti, expectedKey, messageId, plan={mode:'remove'}) {
+    const mode=oneShotMode(plan.mode);
+    if(mode==='off')return {resolved:false,reason:'off'};
     const read=async()=>{const chat=await api.getChatFromIndex(ci,ti);
       if(!chat || !Array.isArray(chat.message)) throw new Error('대화를 읽지 못했습니다.');return chat;};
     const first=await read();
     const char=await api.getCharacterFromIndex(ci);
-    if(JSON.stringify([char?.chaId,first.id||'index:'+ti])!==expectedKey) return {removed:false,reason:'moved'};
+    if(JSON.stringify([char?.chaId,first.id||'index:'+ti])!==expectedKey) return {resolved:false,reason:'moved'};
     const index=first.message.findIndex(m=>m.chatId===messageId && m.role==='user');
-    if(index<0) return {removed:false,reason:'missing'};
-    if(!first.message.slice(index+1).some(m=>m.role==='char')) return {removed:false,reason:'waiting'};
+    if(index<0) return {resolved:false,reason:'missing'};
+    if(!first.message.slice(index+1).some(m=>m.role==='char')) return {resolved:false,reason:'waiting'};
+    const replacement=oneShotResult(mode,first.message[index].data,plan.label);
+    if(replacement!==null && replacement===first.message[index].data) return {resolved:true,mode};
     const fresh=await read();
-    if(JSON.stringify(fresh)!==JSON.stringify(first)) return {removed:false,reason:'busy'};
-    const next=clone(fresh);next.message.splice(index,1);
+    if(JSON.stringify(fresh)!==JSON.stringify(first)) return {resolved:false,reason:'busy'};
+    const next=clone(fresh);
+    if(replacement===null)next.message.splice(index,1);
+    else next.message[index]={...next.message[index],data:replacement};
     await api.setChatToIndex(ci,ti,next);
     const saved=await read();
-    if(saved.message.some(m=>m.chatId===messageId))
-      throw new Error('지침 삭제 결과를 확인하지 못했습니다. 채팅을 확인해 주세요.');
-    return {removed:true};
+    const actual=saved.message.find(m=>m.chatId===messageId);
+    if(replacement===null?Boolean(actual):actual?.data!==replacement)
+      throw new Error('지침 정리 결과를 확인하지 못했습니다. 채팅을 확인해 주세요.');
+    return {resolved:true,mode};
+  }
+  // Backup scopes keep the folder skeleton so the export stays an importable module.
+  function filterModule(mod, keep) {
+    const result=clone(mod);
+    result.lorebook=(result.lorebook||[]).filter(item=>item.mode==='folder'||keep(item));
+    return result;
   }
   root.ScenarioCore = {MODULE_ID, MODULE_NAMESPACE, MODULE_NAME, DEFAULTS, clone, folder, folders, entries, isLibraryModule, normalizeCoverage, mergeCoverage, cleanInput,
     seedEntry,sourceId,sourceMeta,decorateEntry,standardizeModule,hydrateSeed,newModule,suggestTitle,convert,append,validateImport,
-    importEntries,saveEntry,Repository,chatContext,addUserMessage,removeUserMessage};
+    importEntries,saveEntry,Repository,chatContext,addUserMessage,estimateTokens,ONE_SHOT_MODES,oneShotMode,oneShotResult,resolveOneShot,filterModule};
   if(typeof module !== 'undefined' && module.exports) module.exports=root.ScenarioCore;
 })(globalThis);

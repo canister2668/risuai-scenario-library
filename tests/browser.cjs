@@ -193,31 +193,92 @@ const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.re
   assert.equal(direct.writes,2);assert.equal(direct.sends,0);assert.equal(direct.chat.message.length,3);
   assert.equal(direct.chat.message[2].role,'user');assert.equal(direct.chat.message[2].data,original,'unmodified source reaches the chat');
 
-  // Path C: the one-shot toggle removes the instruction after the model replies.
-  await page.evaluate(()=>testHost.open());
-  await page.getByRole('button',{name:/^전체/}).click();
-  await page.getByLabel('상황극 검색').fill('The Unending Authentication');
-  await page.locator('.pick').filter({hasText:'The Unending Authentication'}).first().click();
-  await page.getByLabel('간략한 상황극 줄거리').waitFor();
-  await page.getByLabel('응답 후 지침 자동 삭제').check();
+  // Path C: one-shot handling removes the instruction after the model replies.
+  const reply=async()=>{await page.evaluate(()=>{testHost.chat.message.push({role:'char',data:'model reply'});
+   return Promise.all(testHost.outputListeners.map(fn=>fn({char:{chaId:testHost.character},chat:structuredClone(testHost.chat),characterIndex:0,chatIndex:0,messageIndex:testHost.chat.message.length-1})));});};
+  const pending=()=>page.evaluate(()=>JSON.parse(testHost.storage['scenario.v1.pending-clean']||'[]').length);
+  const openDetail=async(name,filter='전체')=>{await page.evaluate(()=>testHost.open());
+   await page.getByRole('button',{name:new RegExp('^'+filter)}).click();
+   await page.getByLabel('상황극 검색').fill(name);
+   await page.locator('.pick').filter({hasText:name}).first().click();
+   await page.getByLabel('간략한 상황극 줄거리').waitFor();};
+  await openDetail('The Unending Authentication');
+  // The estimate has to be visibly larger than a chars/4 rule for a Korean-heavy prompt.
+  assert.match(await page.locator('.size-note').innerText(),/\d+자 · 약 [\d,]+토큰/);
+  await page.getByLabel('응답 후 지침 처리').selectOption('remove');
   await page.getByRole('button',{name:'채팅에 추가',exact:true}).click();
   await page.waitForFunction(()=>testHost.hides===3);
-  const queued=await page.evaluate(()=>({messages:testHost.chat.message.length,pending:JSON.parse(testHost.storage['scenario.v1.pending-clean']||'[]').length}));
-  assert.equal(queued.messages,4);assert.equal(queued.pending,1,'auto-clean target is queued after the add');
-  await page.evaluate(()=>{testHost.chat.message.push({role:'char',data:'model reply'});
-   return Promise.all(testHost.outputListeners.map(fn=>fn({char:{chaId:testHost.character},chat:structuredClone(testHost.chat),characterIndex:0,chatIndex:0,messageIndex:testHost.chat.message.length-1})));});
+  assert.equal(await page.evaluate(()=>testHost.chat.message.length),4);
+  assert.equal(await pending(),1,'the one-shot target is queued after the add');
+  await reply();
   await page.waitForFunction(()=>testHost.chat.message.length===4&&testHost.chat.message[3].role==='char');
-  const cleaned=await page.evaluate(()=>({roles:testHost.chat.message.map(m=>m.role),pending:JSON.parse(testHost.storage['scenario.v1.pending-clean']||'[]').length,scriptstate:testHost.chat.scriptstate}));
+  const cleaned=await page.evaluate(()=>({roles:testHost.chat.message.map(m=>m.role),scriptstate:testHost.chat.scriptstate}));
   assert.deepEqual(cleaned.roles,['char','user','user','char'],'only the one-shot instruction is removed');
-  assert.equal(cleaned.pending,0,'the cleanup queue is drained');
+  assert.equal(await pending(),0,'the queue is drained');
   assert.deepEqual(cleaned.scriptstate,{$keep:'yes'},'chat state survives the cleanup write');
-  await page.evaluate(()=>testHost.open());
-  await page.getByLabel('상황극 검색').waitFor();
-  await page.getByRole('button',{name:/^◷ 최근/}).click();
-  await page.locator('.pick').filter({hasText:'The Unending Authentication'}).first().click();
-  await page.getByLabel('간략한 상황극 줄거리').waitFor();
-  await page.getByLabel('응답 후 지침 자동 삭제').uncheck();
+
+  // 'collapse' keeps a one-line record instead of deleting the message.
+  await openDetail('The Unending Authentication');
+  await page.getByLabel('응답 후 지침 처리').selectOption('collapse');
+  await page.getByRole('button',{name:'채팅에 추가',exact:true}).click();
+  await page.waitForFunction(()=>testHost.hides===4);
+  await reply();
+  await page.waitForFunction(()=>testHost.chat.message.some(m=>m.data==='[지침 적용됨: The Unending Authentication]'));
+  assert.equal(await page.evaluate(()=>testHost.chat.message.length),6,'collapse keeps the message in place');
+  assert.equal(await pending(),0);
+  await page.evaluate(()=>{testHost.chat.message=testHost.chat.message.slice(0,1);});
+
+  // The cart merges several scenarios in a chosen order.
+  await openDetail('The Unending Authentication');
+  await page.getByLabel('응답 후 지침 처리').selectOption('off');
+  await page.getByRole('button',{name:/^담기/}).click();
   await page.getByRole('button',{name:'보관함으로'}).click();
+  await page.getByLabel('상황극 검색').fill('37분');
+  await page.locator('.pick').filter({hasText:'37분'}).first().click();
+  await page.getByLabel('간략한 상황극 줄거리').waitFor();
+  await page.getByRole('button',{name:/^담기/}).click();
+  await page.getByRole('button',{name:'보관함으로'}).click();
+  await page.getByRole('button',{name:/^담은 상황극 2개/}).click();
+  assert.equal(await page.locator('.cart-row').count(),2);
+  const firstTitle=await page.locator('.cart-row .cart-body strong').first().innerText();
+  await page.locator('.cart-row').first().getByRole('button',{name:'아래로 옮기기'}).click();
+  await page.waitForFunction(t=>document.querySelector('.cart-row .cart-body strong').textContent!==t,firstTitle);
+  assert.equal(await page.locator('.cart-row .cart-body strong').nth(1).innerText(),firstTitle,'reorder moves the row down');
+  await noOverflow('cart');
+  await page.screenshot({path:path.join(__dirname,`../artifacts/cart-${width}.png`),fullPage:true});
+  await page.getByRole('button',{name:'인풋카드에 합치기'}).click();
+  const mergedCard=await page.getByRole('textbox',{name:'인풋카드 본문'}).inputValue();
+  assert(mergedCard.includes('\n\n'),'both scenarios land in one card');
+  assert.match(await page.locator('.counter').innerText(),/자 · 약 [\d,]+토큰 \(추정\)/);
+  await page.getByRole('button',{name:'채팅에 추가',exact:true}).click();
+  await page.waitForFunction(()=>testHost.hides===5);
+  assert.equal(await page.evaluate(()=>testHost.chat.message.at(-1).data),mergedCard,'the merged card reaches the chat');
+  await page.evaluate(()=>testHost.open());
+  assert.equal(await page.getByRole('button',{name:/^담은 상황극/}).count(),0,'the cart empties after it is committed');
+
+  // Recent searches come back as chips once the box is empty again.
+  await page.getByRole('button',{name:/^전체/}).click();
+  const history=page.getByLabel('최근 검색어');
+  assert.equal(await history.isVisible(),true,'earlier searches are remembered');
+  await history.getByRole('button',{name:'37분'}).click();
+  await page.waitForFunction(()=>document.querySelector('.search input').value==='37분');
+  assert.equal(await history.isVisible(),false,'history hides while a query is active');
+  await page.getByRole('button',{name:'검색어 지우기'}).click();
+  await history.getByRole('button',{name:'기록 지우기'}).click();
+  assert.equal(await history.isVisible(),false,'clearing the history empties the chip row');
+
+  // Backup offers scopes and a filtered export stays an importable module.
+  await page.evaluate(()=>{testHost.downloads=[];const create=URL.createObjectURL;URL.createObjectURL=blob=>{blob.text().then(text=>testHost.downloads.push(text));return create.call(URL,blob);};});
+  await page.getByRole('button',{name:'더보기 메뉴'}).click();
+  await page.getByRole('button',{name:'보관함 백업'}).click();
+  const scope=page.getByRole('dialog',{name:'백업 범위 고르기'});await scope.waitFor();
+  await scope.getByRole('button',{name:/^즐겨찾기/}).click();
+  await page.waitForFunction(()=>testHost.downloads?.length===1);
+  const exported=JSON.parse(await page.evaluate(()=>testHost.downloads[0]));
+  const exportedEntries=exported.lorebook.filter(x=>x.mode!=='folder');
+  assert.equal(exportedEntries.length,1,'only the starred scenario is exported');
+  assert.equal(exported.lorebook.filter(x=>x.mode==='folder').length,6,'folders survive so the export can be imported');
+  assert(exportedEntries[0].content.length>0,'the filtered export carries real bodies');
 
   await page.evaluate(()=>testHost.open());
   await page.getByRole('button',{name:/^◷ 최근/}).click();
@@ -254,7 +315,7 @@ const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.re
   assert.match(await page.getByLabel('상황극 서고 수집 범위').innerText(),/탭 확인 2026-09-17/,'seed restores crawl coverage');
 
   assert.deepEqual(errors,[]);
-  results.push({width,pass:true,checks:['cache-only-open','module-canonical-save','module-cache-refresh','bundled-module-seed','compact-storage','cache-clear-preserves-module','storage-free-seed-rebuild','load-more','auto-load-on-scroll','adult-filter-both-ways','favorites','recent','search-summary','save','folder','literal-regex','source-preserved','mobile-overflow','input-card','one-tap-add','no-auto-generation','duplicate-click','one-shot-auto-clean','mode-memory','concurrent-edit','chat-menu-location','badge-survives-sanitiser','badge-legible-at-20px','chat-menu-row-opens']});
+  results.push({width,pass:true,checks:['cache-only-open','module-canonical-save','module-cache-refresh','bundled-module-seed','compact-storage','cache-clear-preserves-module','storage-free-seed-rebuild','load-more','auto-load-on-scroll','adult-filter-both-ways','favorites','recent','search-summary','save','folder','literal-regex','source-preserved','mobile-overflow','input-card','one-tap-add','no-auto-generation','duplicate-click','one-shot-remove','one-shot-collapse','cart-merge-and-reorder','token-estimate','search-history','backup-scope-filter','mode-memory','concurrent-edit','chat-menu-location','badge-survives-sanitiser','badge-legible-at-20px','chat-menu-row-opens']});
   await page.close();
  }
  fs.writeFileSync(path.join(__dirname,'../artifacts/browser-results.json'),JSON.stringify(results,null,2));console.log(JSON.stringify(results,null,2));
