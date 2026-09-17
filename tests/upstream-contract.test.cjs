@@ -32,7 +32,7 @@ test('the distributable uses only declared stock API v3 surfaces',()=>{
   assert.deepEqual(expected,[
     'getCharacter','getCharacterFromIndex','getChatFromIndex','getCurrentCharacterIndex',
     'getCurrentChatIndex','getDatabase','hideContainer','onUnload','pluginStorage',
-    'registerButton','registerSetting','setChatToIndex','setDatabaseLite','showContainer',
+    'registerButton','registerSetting','requestPluginPermission','setChatToIndex','setDatabaseLite','showContainer',
     'unregisterUIPart'
   ]);
   for(const name of expected){

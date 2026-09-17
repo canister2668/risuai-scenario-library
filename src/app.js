@@ -81,6 +81,7 @@
     page:'list', filter:'all', query:'', shown:PAGE_STEP, selected:null, draft:null, compose:'', undo:null, busy:false,
     importItems:null,importCoverage:null,importQuery:'',importView:'candidates',importSearchBody:false,importPage:0,importFolder:''};
   const registrations=[];
+  let databasePermission=typeof api.requestPluginPermission!=='function';
   let pendingAdd=null;
   let preferenceQueue=Promise.resolve(), draftTimer, listObserver=null, lastPage=null;
   let autoLoadArmed=false, syncChipCounts=()=>{},tryAutoLoad=()=>{};
@@ -117,10 +118,27 @@
   function scheduleDraft(){clearTimeout(draftTimer);draftTimer=setTimeout(()=>saveDraft().catch(error),600);}
   async function context(){if(!(await api.getCharacter())?.chaId)return 'none';return (await C.chatContext(api)).key;}
   function rememberMode(){return store('scenario.v1.context.'+state.context,{mode:state.mode,target:state.target,compose:state.compose});}
+  async function openSource(event,url){
+    event.preventDefault();
+    const popup=globalThis.open(url,'_blank','noopener,noreferrer');
+    if(popup){popup.opener=null;return;}
+    try{await navigator.clipboard.writeText(url);toast('새 탭 열기가 차단되어 원문 주소를 복사했습니다.');}
+    catch(e){toast('새 탭 열기가 차단되었습니다. 원문 주소를 길게 눌러 복사해 주세요.');}
+  }
   function exitNow(){api.hideContainer();clearTimeout(draftTimer);saveDraft().catch(()=>{});rememberMode().catch(()=>{});}
   document.body.addEventListener('click',event=>{if(innerWidth>=700&&event.target===document.body)exitNow();});
   function exitButton(compact=false){const b=el('button',{type:'button',class:compact?'icon close':'exit-button',onClick:exitNow},compact?'×':'나가기');b.setAttribute('aria-label','상황극 탐색기 닫기');return b;}
+  async function ensureDatabasePermission(){
+    if(databasePermission)return true;
+    try{databasePermission=await api.requestPluginPermission('db')===true;}
+    catch(e){console.error('[scenario-library] database permission',e);databasePermission=false;}
+    return databasePermission;
+  }
   async function open(){
+    if(!await ensureDatabasePermission()){
+      console.warn('[scenario-library] DB access was not granted; the explorer will remain closed.');
+      return;
+    }
     await api.showContainer('fullscreen');
     root.replaceChildren(shell('상황극 탐색기',el('span',{class:'mark','aria-hidden':'true'},'☰'),[exitButton()]),
       el('section',{class:'loading-card','aria-live':'polite'},el('strong',{},'보관함을 여는 중'),el('p',{class:'muted'},'목록만 먼저 불러오고 본문은 선택할 때 읽습니다.'),el('div',{class:'skeleton'})));
@@ -447,9 +465,11 @@
     };
     const controls=modeControls(update);
     const source=item.scenarioLibrarySource;
+    const sourceLink=source?.sourceUrl?el('a',{href:source.sourceUrl,target:'_blank',rel:'noopener noreferrer',class:'source-link',
+      onClick:event=>openSource(event,source.sourceUrl)},'원문 ↗'):null;
     const meta=el('div',{class:'detail-meta'},...tags(item),
       metaOf(item)?el('span',{class:'dim'},metaOf(item)):null,
-      source?.sourceUrl?el('a',{href:source.sourceUrl,target:'_blank',rel:'noopener noreferrer',class:'source-link'},'원문 ↗'):null);
+      sourceLink);
     const subtitle=subtitleOf(item);
     root.append(el('section',{class:'panel'},
       el('h2',{class:'detail-title'},display(item.comment)),meta,
@@ -669,6 +689,7 @@
     if(state.page!=='list'&&state.page!=='import'){goto('list');return;}
     exitNow();
   });
+  await ensureDatabasePermission();
   try{await api.unregisterUIPart(LEGACY_ENTRY_ID);}catch(e){}
   registrations.push(await api.registerButton({name:'상황극 탐색기',icon:ENTRY_BADGE,iconType:'html',location:'chat',id:ENTRY_ID},()=>run(open)));
   registrations.push(await api.registerSetting('상황극 탐색기',()=>run(open),ENTRY_BADGE,'html'));

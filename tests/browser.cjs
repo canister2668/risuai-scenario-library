@@ -19,17 +19,19 @@ const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.re
   await page.route('https://scenario.test/**',route=>route.fulfill({contentType:'text/html',body:'<html><head></head><body></body></html>'}));
   await page.goto('https://scenario.test/');
   await page.evaluate(fixture=>{
-   const storage=structuredClone(fixture.storage);window.testHost={modules:[{id:'other',name:'untouched',lorebook:[]},structuredClone(fixture.module)],chat:{id:'chat-1',message:[{role:'char',data:'Hello'}],scriptstate:{$keep:'yes'}},shows:0,hides:0,writes:0,sends:0,dbReads:0,storage,character:'char-1',delayCatalog:true,unregistered:[]};
+   const storage=structuredClone(fixture.storage);window.testHost={modules:[{id:'other',name:'untouched',lorebook:[]},structuredClone(fixture.module)],chat:{id:'chat-1',message:[{role:'char',data:'Hello'}],scriptstate:{$keep:'yes'}},shows:0,hides:0,writes:0,sends:0,dbReads:0,storage,character:'char-1',delayCatalog:true,unregistered:[],permissionRequests:[],alerts:[]};
    const h=window.testHost;window.Risuai={
     getDatabase:async()=>{h.dbReads++;return{modules:structuredClone(h.modules)}},setDatabaseLite:async p=>{h.modules=structuredClone(p.modules);},
     getCharacter:async()=>({chaId:h.character}),getCharacterFromIndex:async()=>({chaId:h.character}),getCurrentCharacterIndex:async()=>0,getCurrentChatIndex:async()=>0,
     getChatFromIndex:async()=>structuredClone(h.chat),setChatToIndex:async(a,b,c)=>{h.writes++;h.chat=structuredClone(c)},
     pluginStorage:{getItem:async k=>{if(k==='scenario.v4.catalog'&&h.delayCatalog)await new Promise(resolve=>h.releaseCatalog=resolve);return storage[k]??null;},setItem:async(k,v)=>{storage[k]=v},removeItem:async k=>{delete storage[k]},keys:async()=>Object.keys(storage),length:async()=>Object.keys(storage).length,clear:async()=>{for(const key of Object.keys(storage))delete storage[key]}},
+    requestPluginPermission:async permission=>{h.permissionRequests.push({permission,shows:h.shows});return true},
     showContainer:async()=>{h.shows++;document.body.style.display=''},hideContainer:async()=>{h.hides++;document.body.style.display='none'},
     registerButton:async(arg,cb)=>{h.buttonConfig=structuredClone(arg);h.open=cb;return{id:'button'}},registerSetting:async()=>({id:'setting'}),onUnload:async()=>{},unregisterUIPart:async id=>{h.unregistered.push(id)},sendChat:async()=>{h.sends++}
    };
   },{storage:storageFixture,module:moduleFixture});
   await page.addScriptTag({content:plugin});await page.waitForFunction(()=>!!window.testHost.open);
+  assert.deepEqual(await page.evaluate(()=>testHost.permissionRequests),[{permission:'db',shows:0}],'DB permission is requested during plugin startup, before any overlay opens');
   // The button beside the chat textarea toggles DefaultChatScreen's own menu, and that menu
   // renders additionalChatMenu only. location 'hamburger' feeds additionalHamburgerMenu, which
   // Sidebar.svelte paints in the left icon rail instead, so the entry has to say 'chat'.
@@ -91,6 +93,7 @@ const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.re
   await page.evaluate(n=>{document.getElementById('chat-menu-replica').remove();testHost.shows=n},showsBefore);
     const appBox=await page.locator('.app').boundingBox();
   if(width>=700){assert(appBox.width<width&&appBox.height<844,'tablet and desktop use a centered panel');await page.mouse.click(4,4);assert.equal(await page.evaluate(()=>testHost.hides),1,'desktop backdrop closes the panel');await page.evaluate(async()=>{document.body.style.display='';testHost.hides=0;await testHost.open();});await page.getByLabel('상황극 검색').waitFor();}
+  if(width>=700){const backdrop=await page.evaluate(()=>({html:getComputedStyle(document.documentElement).backgroundColor,body:getComputedStyle(document.body).backgroundColor,filter:getComputedStyle(document.body).backdropFilter||getComputedStyle(document.body).webkitBackdropFilter}));assert.equal(backdrop.html,'rgba(0, 0, 0, 0)');assert.equal(backdrop.body,'rgba(0, 0, 0, 0)');assert.equal(backdrop.filter,'none','tablet/desktop area outside the panel is fully transparent');}
 
   // The bundled library opens on a short first page and grows on demand.
   await waitCount(page,`${totalCount}개 중 30개 표시`);
@@ -124,6 +127,10 @@ const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.re
   await page.locator('.pick').filter({hasText:'37분'}).first().click();
   await page.getByLabel('간략한 상황극 줄거리').waitFor();
   assert((await page.getByLabel('간략한 상황극 줄거리').innerText()).length>20);
+  const sourceHref=await page.getByRole('link',{name:'원문 ↗'}).getAttribute('href');assert.match(sourceHref,/^https:\/\/arca\.live\/b\/characterai\/[0-9]+$/);
+  await page.evaluate(()=>{window.open=()=>null;Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async value=>{testHost.copiedSource=value}}});});
+  await page.evaluate(()=>document.querySelector('.source-link').click());await page.waitForFunction(()=>!!testHost.copiedSource);assert.equal(await page.evaluate(()=>testHost.copiedSource),sourceHref);
+  assert((await page.getByRole('status').innerText()).includes('원문 주소를 복사했습니다.'));
   const cleanedSeed=await page.getByLabel('채팅에 들어갈 본문').textContent();
   assert(cleanedSeed.startsWith('[OOC:'),'post chatter is removed before input');
   assert(!cleanedSeed.includes('CHAR가 보내는 문자'),'post preface does not reach the chat');

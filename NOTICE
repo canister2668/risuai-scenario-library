@@ -1,0 +1,8 @@
+The MIT License covers the scenario-library software and documentation.
+
+Scenario texts and source metadata collected from third-party posts are not
+relicensed under MIT. Rights in those materials remain with their respective
+authors. This includes the bundled seed and generated scenario module data.
+
+RisuAI is a separate upstream project. This repository is an independent API
+v3 extension and is not an official RisuAI distribution.

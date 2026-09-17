@@ -1,6 +1,7 @@
 {
   "name": "risuai-scenario-library",
   "version": "1.0.0",
+  "license": "MIT",
   "private": true,
   "description": "RisuAI 상황극 탐색기와 상황극 서고",
   "scripts": {
