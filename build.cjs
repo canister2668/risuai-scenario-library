@@ -4,6 +4,7 @@ const pkg=JSON.parse(read('package.json'));
 const seed=JSON.parse(read('src/seed.json'));
 const UPDATE_URL='https://raw.githubusercontent.com/canister2668/risuai-scenario-library/main/update/scenario-library.plugin.js';
 const make=(version,bundledSeed,updateURL='')=>'//@name scenario_library\n//@display-name 상황극 탐색기\n//@api 3.0\n//@version '+version+'\n'+(updateURL?'//@update-url '+updateURL+'\n':'')+'\n'+read('src/core.js')+'\n{\nconst STYLE = '+JSON.stringify(read('src/style.css'))+';\nconst SCENARIO_SEED = '+JSON.stringify(bundledSeed)+';\n'+read('src/app.js')+'\n}\n';
+fs.mkdirSync(path.join(root,'dist'),{recursive:true});
 const output=make(pkg.version,seed,UPDATE_URL);
 fs.writeFileSync(path.join(root,'dist/scenario-library.plugin.js'),output);
 fs.mkdirSync(path.join(root,'update'),{recursive:true});
