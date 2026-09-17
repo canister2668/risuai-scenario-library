@@ -8,7 +8,7 @@
 
 - 공식 웹 RisuAI용 설치 파일: [최신 GitHub Release](https://github.com/canister2668/risuai-scenario-library/releases/latest/download/scenario-library.plugin.js)
 - 상황극 서고 모듈: [Proton Drive 공유 폴더](https://drive.proton.me/urls/T67TA9HZ6R#SMKnYZym7F70)
-- 현재 버전: `1.0.0`
+- 현재 버전: `1.0.1`
 - 업데이트 주소: `https://raw.githubusercontent.com/canister2668/risuai-scenario-library/main/update/scenario-library.plugin.js`
 
 Proton Drive에서 상황극 서고 모듈을 받아 모듈 설정에서 먼저 가져오고, GitHub Release의 `scenario-library.plugin.js`를 플러그인 설정에서 가져옵니다. 이후에는 RisuAI가 파일 상단의

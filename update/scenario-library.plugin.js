@@ -1,7 +1,7 @@
 //@name scenario_library
 //@display-name 상황극 탐색기
 //@api 3.0
-//@version 1.0.0
+//@version 1.0.1
 //@update-url https://raw.githubusercontent.com/canister2668/risuai-scenario-library/main/update/scenario-library.plugin.js
 
 /* Shared by the importable plugin and its tests. No host side effects. */
