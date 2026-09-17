@@ -9,7 +9,7 @@ execFileSync(process.execPath,[path.join(root,'build.cjs')],{stdio:'inherit'});
 const targetDir=path.join(root,'release');
 fs.rmSync(targetDir,{recursive:true,force:true});
 fs.mkdirSync(targetDir,{recursive:true});
-const names=['scenario-library.plugin.js','scenario-library.module.json'];
+const names=['scenario-library.plugin.js'];
 const assets=names.map(name=>{const source=path.join(root,'dist',name),target=path.join(targetDir,name);fs.copyFileSync(source,target);const data=fs.readFileSync(target);return{name,data,digest:crypto.createHash('sha256').update(data).digest('hex')};});
 fs.writeFileSync(path.join(targetDir,'SHA256SUMS'),assets.map(asset=>`${asset.digest}  ${asset.name}`).join('\n')+'\n');
 const data=assets[0].data;

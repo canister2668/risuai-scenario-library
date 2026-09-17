@@ -7,16 +7,16 @@
 ## 설치와 업데이트
 
 - 공식 웹 RisuAI용 설치 파일: [최신 GitHub Release](https://github.com/canister2668/risuai-scenario-library/releases/latest/download/scenario-library.plugin.js)
-- 상황극 서고 모듈: [최신 GitHub Release](https://github.com/canister2668/risuai-scenario-library/releases/latest/download/scenario-library.module.json)
+- 상황극 서고 모듈: [Proton Drive 공유 폴더](https://drive.proton.me/urls/T67TA9HZ6R#SMKnYZym7F70)
 - 현재 버전: `1.0.0`
 - 업데이트 주소: `https://raw.githubusercontent.com/canister2668/risuai-scenario-library/main/update/scenario-library.plugin.js`
 
-릴리즈의 `scenario-library.module.json`을 모듈 설정에서 먼저 가져오고, `scenario-library.plugin.js`를 플러그인 설정에서 가져옵니다. 이후에는 RisuAI가 파일 상단의
-`//@update-url`을 확인하여 새 버전을 표시합니다. 릴리즈마다 `SHA256SUMS`도 함께 제공합니다.
+Proton Drive에서 상황극 서고 모듈을 받아 모듈 설정에서 먼저 가져오고, GitHub Release의 `scenario-library.plugin.js`를 플러그인 설정에서 가져옵니다. 이후에는 RisuAI가 파일 상단의
+`//@update-url`을 확인하여 새 버전을 표시합니다. GitHub Release에는 플러그인과 `SHA256SUMS`만 제공합니다.
 
 ## 사용 흐름
 
-1. `dist/scenario-library.module.json`과 `dist/scenario-library.plugin.js`를 차례로 공식 웹 RisuAI에 설치합니다.
+1. Proton Drive에서 받은 상황극 서고 모듈과 GitHub Release에서 받은 상황극 탐색기 플러그인을 차례로 공식 웹 RisuAI에 설치합니다.
 2. 채팅 입력창 오른쪽의 햄버거 메뉴를 열고, 전용 배지가 붙은 **상황극 탐색기**를 고릅니다.
 3. 맨 위 검색창에 제목·줄거리·지침을 입력하거나, 그 아래 분류 칩(전체 / ★ 즐겨찾기 / ◷ 최근 / 폴더)을 고릅니다. 칩에는 항목 수가 함께 표시됩니다.
 4. 최신순/제목순/오래된순 정렬과 `19금 포함 / 19금 숨김 / 19금만` 표시 설정을 고릅니다. 기본값은 **19금 포함**입니다.
