@@ -30,7 +30,7 @@ test('the distributable uses only declared stock API v3 surfaces',()=>{
   const used=[...source.matchAll(/\bapi\.([A-Za-z_$][\w$]*)/g)].map(match=>match[1]);
   const expected=[...new Set(used)].sort();
   assert.deepEqual(expected,[
-    'getCharacter','getCharacterFromIndex','getChatFromIndex','getCurrentCharacterIndex',
+    'addRisuChatListener','getCharacter','getCharacterFromIndex','getChatFromIndex','getCurrentCharacterIndex',
     'getCurrentChatIndex','getDatabase','hideContainer','onUnload','pluginStorage',
     'registerButton','registerSetting','requestPluginPermission','setChatToIndex','setDatabaseLite','showContainer',
     'unregisterUIPart'

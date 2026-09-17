@@ -8,7 +8,7 @@
 
 - 공식 웹 RisuAI용 설치 파일: [최신 GitHub Release](https://github.com/canister2668/risuai-scenario-library/releases/latest/download/scenario-library.plugin.js)
 - 상황극 서고 모듈: [Proton Drive 공유 폴더](https://drive.proton.me/urls/T67TA9HZ6R#SMKnYZym7F70)
-- 현재 버전: `1.0.1`
+- 현재 버전: `1.1.0`
 - 업데이트 주소: `https://raw.githubusercontent.com/canister2668/risuai-scenario-library/main/update/scenario-library.plugin.js`
 
 Proton Drive에서 상황극 서고 모듈을 받아 모듈 설정에서 먼저 가져오고, GitHub Release의 `scenario-library.plugin.js`를 플러그인 설정에서 가져옵니다. 이후에는 RisuAI가 파일 상단의
@@ -23,6 +23,7 @@ Proton Drive에서 상황극 서고 모듈을 받아 모듈 설정에서 먼저 
 5. 목록은 한 줄에 제목·짧은 줄거리·분류·`19+`·날짜·작성자를 담은 행으로 보여 주고, 30개씩 늘어납니다. 아래로 스크롤하면 한 번에 한 쪽씩 자동으로 더 불러옵니다.
 6. 행을 눌러 상세를 열고, **일반봇 / 시뮬봇** 두 칸짜리 선택에서 하나를 고릅니다. 시뮬봇은 입력한 대상 이름으로 정확한 `{{char}}` 토큰만 치환하며, 최근에 쓴 대상 이름을 칩으로 다시 고를 수 있습니다.
 7. 아래 고정 바에서 **채팅에 추가**를 누르면 한 번에 들어갑니다. 손보고 싶으면 **다듬기**로 인풋카드를 열어 고친 뒤 추가합니다.
+8. 고정 바 위의 **응답 후 지침 자동 삭제 (일회용)** 토글을 켜 두면, AI 응답이 도착한 뒤 방금 넣은 지침 유저 메시지가 채팅에서 자동으로 지워집니다. 지침은 첫 응답에만 영향을 주고, 이후 요청마다 다시 전송되어 문맥을 차지하는 일이 없어집니다. 응답 이외의 메시지와 채팅 상태는 건드리지 않으며, 응답이 오기 전에는 아무것도 지우지 않습니다.
 
 모바일에서는 화면 전체를 사용하고, 태블릿과 PC에서는 중앙 패널로 열립니다. 큰 화면에서는 패널 바깥을 누르거나 **나가기**를 눌러 닫을 수 있습니다.
 

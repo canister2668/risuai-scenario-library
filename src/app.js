@@ -83,6 +83,26 @@
   const registrations=[];
   let databasePermission=typeof api.requestPluginPermission!=='function';
   let pendingAdd=null;
+  // One-shot instructions queued for removal once the model has replied.
+  const PENDING_CLEAN_KEY='scenario.v1.pending-clean';
+  const canAutoClean=typeof api.addRisuChatListener==='function';
+  let pendingClean=[],cleaning=false;
+  function savePendingClean(){return store(PENDING_CLEAN_KEY,pendingClean);}
+  async function handleOutput(event){
+    if(cleaning||!pendingClean.length)return;
+    const key=JSON.stringify([event?.char?.chaId,event?.chat?.id||'index:'+event?.chatIndex]);
+    if(!pendingClean.some(p=>p.key===key))return;
+    cleaning=true;
+    try{
+      for(const p of pendingClean.filter(x=>x.key===key)){
+        const result=await C.removeUserMessage(api,event.characterIndex,event.chatIndex,p.key,p.messageId);
+        // 'waiting'/'busy'/'moved' keep the entry for the next output event.
+        if(result.removed||result.reason==='missing')pendingClean=pendingClean.filter(x=>x!==p);
+      }
+      await savePendingClean();
+    }catch(e){console.warn('[scenario-library] auto-clean',e);}
+    finally{cleaning=false;}
+  }
   let preferenceQueue=Promise.resolve(), draftTimer, listObserver=null, lastPage=null;
   let autoLoadArmed=false, syncChipCounts=()=>{},tryAutoLoad=()=>{};
   const armAutoLoad=()=>{autoLoadArmed=true;requestAnimationFrame(()=>tryAutoLoad());};
@@ -111,12 +131,14 @@
   async function run(fn){if(state.busy)return;errorBox.hidden=true;state.busy=true;
     const controls=[...document.querySelectorAll('button,input,textarea,select')].map(node=>[node,node.disabled]);controls.forEach(([node])=>node.disabled=true);
     try{await fn();}catch(e){error(e);}finally{state.busy=false;controls.forEach(([node,disabled])=>{if(node.isConnected)node.disabled=disabled;});}}
-  async function load(key, fallback){const raw=await api.pluginStorage.getItem(key);if(raw==null)return fallback;return typeof raw==='string'?JSON.parse(raw):raw;}
+  // A corrupt stored value must degrade to defaults, not brick the explorer.
+  async function load(key, fallback){try{const raw=await api.pluginStorage.getItem(key);if(raw==null)return fallback;return typeof raw==='string'?JSON.parse(raw):raw;}catch(e){console.warn('[scenario-library] corrupt storage',key,e);return fallback;}}
   function store(key,value){const snapshot=JSON.stringify(value);preferenceQueue=preferenceQueue.catch(()=>{}).then(()=>api.pluginStorage.setItem(key,snapshot));return preferenceQueue;}
   function savePrefs(){return store('scenario.v1.preferences',state.prefs);}
   function saveDraft(){clearTimeout(draftTimer);return store('scenario.v1.draft',state.draft);}
   function scheduleDraft(){clearTimeout(draftTimer);draftTimer=setTimeout(()=>saveDraft().catch(error),600);}
-  async function context(){if(!(await api.getCharacter())?.chaId)return 'none';return (await C.chatContext(api)).key;}
+  // A character without an open chat must still allow browsing the library.
+  async function context(){try{if(!(await api.getCharacter())?.chaId)return 'none';return (await C.chatContext(api)).key;}catch(e){return 'none';}}
   function rememberMode(){return store('scenario.v1.context.'+state.context,{mode:state.mode,target:state.target,compose:state.compose});}
   async function openSource(event,url){
     event.preventDefault();
@@ -145,8 +167,9 @@
     try{
       state.mod=await repo.initialize();
       const prefs=await load('scenario.v1.preferences',{});
-      state.prefs={favorites:[],recent:[],lastFolder:'',sort:'newest',adult:'all',targets:[],...prefs};
+      state.prefs={favorites:[],recent:[],lastFolder:'',sort:'newest',adult:'all',targets:[],autoClean:false,...prefs};
       for(const key of ['favorites','recent','targets']) if(!Array.isArray(state.prefs[key]))state.prefs[key]=[];
+      state.prefs.autoClean=state.prefs.autoClean===true;
       if(!['newest','title','oldest'].includes(state.prefs.sort))state.prefs.sort='newest';
       if(!['all','hide','only'].includes(state.prefs.adult))state.prefs.adult='all';
       state.context=await context();state.undo=null;pendingAdd=null;
@@ -261,9 +284,12 @@
       b.append(el('span',{},name),size);
       b.setAttribute('aria-pressed',String(state.filter===id));chips.append(b);
     };
+    // Favourites/recent may reference entries that were deleted since; the chip
+    // must count what the filter will actually show.
+    const ids=new Set(all.map(e=>e.id));
     chip('전체','all',()=>all.length);
-    chip('★ 즐겨찾기','favorites',()=>state.prefs.favorites.length);
-    chip('◷ 최근','recent',()=>state.prefs.recent.length);
+    chip('★ 즐겨찾기','favorites',()=>state.prefs.favorites.filter(id=>ids.has(id)).length);
+    chip('◷ 최근','recent',()=>state.prefs.recent.filter(id=>ids.has(id)).length);
     for(const f of C.folders(state.mod)) chip(f.comment,f.key,()=>all.filter(e=>e.folder===f.key).length);
     syncChipCounts=()=>{for(const [sizeOf,node] of counters)node.textContent=String(sizeOf());};
     syncChipCounts();
@@ -496,6 +522,7 @@
     }else{
       bar.append(button('채팅에 추가',addNow,'primary'),button('다듬기',toCompose));
     }
+    const clean=cleanToggle();if(clean)root.append(clean);
     root.append(bar);
   }
   function noteRecent(item){state.prefs.recent=[item.id,...state.prefs.recent.filter(id=>id!==item.id)].slice(0,30);}
@@ -503,11 +530,28 @@
     if(!pendingAdd || pendingAdd.content!==content || pendingAdd.context!==state.context)
       pendingAdd={id:crypto.randomUUID(),content,context:state.context};
     await C.addUserMessage(api,state.context,content,pendingAdd.id);
+    const autoClean=canAutoClean&&state.prefs.autoClean;
+    if(autoClean){
+      pendingClean=[...pendingClean.filter(p=>p.messageId!==pendingAdd.id),{key:state.context,messageId:pendingAdd.id,addedAt:Date.now()}].slice(-20);
+      // The message is already committed; a failed queue write only loses the cleanup.
+      try{await savePendingClean();}catch(e){console.warn('[scenario-library] auto-clean queue',e);}
+    }
     state.compose='';state.undo=null;pendingAdd=null;
     // A committed message must not be presented as failed just because preference storage failed.
     try{await rememberMode();}catch(e){console.warn('[scenario-library] draft cleanup',e);}
     await api.hideContainer();
-    state.page='list';lastPage=null;render();toast('유저 메시지로 추가했습니다. 전송 버튼으로 응답을 이어가세요.');
+    state.page='list';lastPage=null;render();
+    toast(autoClean?'유저 메시지로 추가했습니다. 응답이 도착하면 지침 메시지는 자동으로 지워집니다.':'유저 메시지로 추가했습니다. 전송 버튼으로 응답을 이어가세요.');
+  }
+  // One-shot toggle: after the model replies, the instruction message is removed
+  // so it stops being resent with every following request.
+  function cleanToggle(){
+    if(state.context==='none'||!canAutoClean)return null;
+    const box=el('input',{type:'checkbox','aria-label':'응답 후 지침 자동 삭제'});box.checked=!!state.prefs.autoClean;
+    box.addEventListener('change',()=>{state.prefs.autoClean=box.checked;savePrefs().catch(error);});
+    return el('label',{class:'clean-toggle'},box,
+      el('span',{class:'clean-copy'},el('strong',{},'응답 후 지침 자동 삭제 (일회용)'),
+        el('small',{},'응답이 도착하면 방금 넣은 지침 메시지를 채팅에서 지웁니다. 지침이 이후 요청마다 다시 전송되지 않습니다.')));
   }
 
   /* ---------- compose ---------- */
@@ -543,6 +587,7 @@
     const bar=el('footer',{class:'bar'});
     if(state.context==='none')bar.append(el('span',{class:'muted grow'},'채팅을 열면 추가할 수 있습니다.'),button('복사',copy));
     else bar.append(button('채팅에 추가',()=>commitToChat(text.value),'primary'),button('복사',copy),button('＋ 더 고르기',()=>goto('list'),'link'));
+    const clean=cleanToggle();if(clean)root.append(clean);
     root.append(bar);
   }
 
@@ -590,7 +635,7 @@
     const cache=async()=>{if(!await confirmAction('목록 캐시를 비울까요? 모듈은 그대로이며 다음 실행 때 자동으로 복구됩니다.','캐시 비우기'))return;
       await repo.clearCache();close();toast('목록 캐시를 비웠습니다. 다음 실행 때 자동 복구됩니다.');};
     const all=async()=>{if(!await confirmAction('즐겨찾기·최근 기록·초안·대상 이름과 캐시를 모두 비울까요? 상황극 서고 모듈은 삭제되지 않습니다.','전체 비우기'))return;
-      await repo.clearAll();state.prefs={favorites:[],recent:[],lastFolder:'',sort:'newest',adult:'all',targets:[]};state.draft=null;close();toast('플러그인 저장소를 비웠습니다. 모듈은 그대로 보존됩니다.');render();};
+      await repo.clearAll();state.prefs={favorites:[],recent:[],lastFolder:'',sort:'newest',adult:'all',targets:[],autoClean:false};state.draft=null;pendingClean=[];close();toast('플러그인 저장소를 비웠습니다. 모듈은 그대로 보존됩니다.');render();};
     dialog.append(el('h2',{},'플러그인 저장소'),
       el('div',{class:'storage-meter'},el('strong',{},formatBytes(usage.bytes)),el('span',{class:'muted'},`${usage.keys}개 항목`)),
       el('dl',{class:'storage-breakdown'},el('div',{},el('dt',{},'목록·출처 메타데이터'),el('dd',{},formatBytes(usage.catalogBytes))),
@@ -690,6 +735,12 @@
     exitNow();
   });
   await ensureDatabasePermission();
+  if(canAutoClean){
+    const queued=await load(PENDING_CLEAN_KEY,[]);
+    // Entries older than a week point at chats the user has moved past.
+    pendingClean=(Array.isArray(queued)?queued:[]).filter(p=>p&&p.key&&p.messageId&&Date.now()-(p.addedAt||0)<7*24*3600*1000);
+    await api.addRisuChatListener('output',event=>handleOutput(event));
+  }
   try{await api.unregisterUIPart(LEGACY_ENTRY_ID);}catch(e){}
   registrations.push(await api.registerButton({name:'상황극 탐색기',icon:ENTRY_BADGE,iconType:'html',location:'chat',id:ENTRY_ID},()=>run(open)));
   registrations.push(await api.registerSetting('상황극 탐색기',()=>run(open),ENTRY_BADGE,'html'));

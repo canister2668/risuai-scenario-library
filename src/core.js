@@ -215,8 +215,29 @@
       throw new Error('추가 결과를 확인하지 못했습니다. 채팅을 확인한 뒤 다시 시도해 주세요.');
     return {duplicate:false};
   }
+  // One-shot instructions: remove the plugin's own user message once a model
+  // reply exists after it. Uses stored ci/ti so it works even when the user has
+  // navigated elsewhere, and follows the same read-verify-write discipline.
+  async function removeUserMessage(api, ci, ti, expectedKey, messageId) {
+    const read=async()=>{const chat=await api.getChatFromIndex(ci,ti);
+      if(!chat || !Array.isArray(chat.message)) throw new Error('대화를 읽지 못했습니다.');return chat;};
+    const first=await read();
+    const char=await api.getCharacterFromIndex(ci);
+    if(JSON.stringify([char?.chaId,first.id||'index:'+ti])!==expectedKey) return {removed:false,reason:'moved'};
+    const index=first.message.findIndex(m=>m.chatId===messageId && m.role==='user');
+    if(index<0) return {removed:false,reason:'missing'};
+    if(!first.message.slice(index+1).some(m=>m.role==='char')) return {removed:false,reason:'waiting'};
+    const fresh=await read();
+    if(JSON.stringify(fresh)!==JSON.stringify(first)) return {removed:false,reason:'busy'};
+    const next=clone(fresh);next.message.splice(index,1);
+    await api.setChatToIndex(ci,ti,next);
+    const saved=await read();
+    if(saved.message.some(m=>m.chatId===messageId))
+      throw new Error('지침 삭제 결과를 확인하지 못했습니다. 채팅을 확인해 주세요.');
+    return {removed:true};
+  }
   root.ScenarioCore = {MODULE_ID, MODULE_NAMESPACE, MODULE_NAME, DEFAULTS, clone, folder, folders, entries, isLibraryModule, normalizeCoverage, mergeCoverage, cleanInput,
     seedEntry,sourceId,sourceMeta,decorateEntry,standardizeModule,hydrateSeed,newModule,suggestTitle,convert,append,validateImport,
-    importEntries,saveEntry,Repository,chatContext,addUserMessage};
+    importEntries,saveEntry,Repository,chatContext,addUserMessage,removeUserMessage};
   if(typeof module !== 'undefined' && module.exports) module.exports=root.ScenarioCore;
 })(globalThis);

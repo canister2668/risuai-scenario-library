@@ -19,7 +19,7 @@ const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.re
   await page.route('https://scenario.test/**',route=>route.fulfill({contentType:'text/html',body:'<html><head></head><body></body></html>'}));
   await page.goto('https://scenario.test/');
   await page.evaluate(fixture=>{
-   const storage=structuredClone(fixture.storage);window.testHost={modules:[{id:'other',name:'untouched',lorebook:[]},structuredClone(fixture.module)],chat:{id:'chat-1',message:[{role:'char',data:'Hello'}],scriptstate:{$keep:'yes'}},shows:0,hides:0,writes:0,sends:0,dbReads:0,storage,character:'char-1',delayCatalog:true,unregistered:[],permissionRequests:[],alerts:[]};
+   const storage=structuredClone(fixture.storage);window.testHost={modules:[{id:'other',name:'untouched',lorebook:[]},structuredClone(fixture.module)],chat:{id:'chat-1',message:[{role:'char',data:'Hello'}],scriptstate:{$keep:'yes'}},shows:0,hides:0,writes:0,sends:0,dbReads:0,storage,character:'char-1',delayCatalog:true,unregistered:[],permissionRequests:[],alerts:[],outputListeners:[]};
    const h=window.testHost;window.Risuai={
     getDatabase:async()=>{h.dbReads++;return{modules:structuredClone(h.modules)}},setDatabaseLite:async p=>{h.modules=structuredClone(p.modules);},
     getCharacter:async()=>({chaId:h.character}),getCharacterFromIndex:async()=>({chaId:h.character}),getCurrentCharacterIndex:async()=>0,getCurrentChatIndex:async()=>0,
@@ -27,7 +27,7 @@ const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.re
     pluginStorage:{getItem:async k=>{if(k==='scenario.v4.catalog'&&h.delayCatalog)await new Promise(resolve=>h.releaseCatalog=resolve);return storage[k]??null;},setItem:async(k,v)=>{storage[k]=v},removeItem:async k=>{delete storage[k]},keys:async()=>Object.keys(storage),length:async()=>Object.keys(storage).length,clear:async()=>{for(const key of Object.keys(storage))delete storage[key]}},
     requestPluginPermission:async permission=>{h.permissionRequests.push({permission,shows:h.shows});return true},
     showContainer:async()=>{h.shows++;document.body.style.display=''},hideContainer:async()=>{h.hides++;document.body.style.display='none'},
-    registerButton:async(arg,cb)=>{h.buttonConfig=structuredClone(arg);h.open=cb;return{id:'button'}},registerSetting:async()=>({id:'setting'}),onUnload:async()=>{},unregisterUIPart:async id=>{h.unregistered.push(id)},sendChat:async()=>{h.sends++}
+    registerButton:async(arg,cb)=>{h.buttonConfig=structuredClone(arg);h.open=cb;return{id:'button'}},registerSetting:async()=>({id:'setting'}),onUnload:async()=>{},unregisterUIPart:async id=>{h.unregistered.push(id)},sendChat:async()=>{h.sends++},addRisuChatListener:async(mode,fn)=>{h.outputListeners.push(fn)}
    };
   },{storage:storageFixture,module:moduleFixture});
   await page.addScriptTag({content:plugin});await page.waitForFunction(()=>!!window.testHost.open);
@@ -193,6 +193,32 @@ const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.re
   assert.equal(direct.writes,2);assert.equal(direct.sends,0);assert.equal(direct.chat.message.length,3);
   assert.equal(direct.chat.message[2].role,'user');assert.equal(direct.chat.message[2].data,original,'unmodified source reaches the chat');
 
+  // Path C: the one-shot toggle removes the instruction after the model replies.
+  await page.evaluate(()=>testHost.open());
+  await page.getByRole('button',{name:/^전체/}).click();
+  await page.getByLabel('상황극 검색').fill('The Unending Authentication');
+  await page.locator('.pick').filter({hasText:'The Unending Authentication'}).first().click();
+  await page.getByLabel('간략한 상황극 줄거리').waitFor();
+  await page.getByLabel('응답 후 지침 자동 삭제').check();
+  await page.getByRole('button',{name:'채팅에 추가',exact:true}).click();
+  await page.waitForFunction(()=>testHost.hides===3);
+  const queued=await page.evaluate(()=>({messages:testHost.chat.message.length,pending:JSON.parse(testHost.storage['scenario.v1.pending-clean']||'[]').length}));
+  assert.equal(queued.messages,4);assert.equal(queued.pending,1,'auto-clean target is queued after the add');
+  await page.evaluate(()=>{testHost.chat.message.push({role:'char',data:'model reply'});
+   return Promise.all(testHost.outputListeners.map(fn=>fn({char:{chaId:testHost.character},chat:structuredClone(testHost.chat),characterIndex:0,chatIndex:0,messageIndex:testHost.chat.message.length-1})));});
+  await page.waitForFunction(()=>testHost.chat.message.length===4&&testHost.chat.message[3].role==='char');
+  const cleaned=await page.evaluate(()=>({roles:testHost.chat.message.map(m=>m.role),pending:JSON.parse(testHost.storage['scenario.v1.pending-clean']||'[]').length,scriptstate:testHost.chat.scriptstate}));
+  assert.deepEqual(cleaned.roles,['char','user','user','char'],'only the one-shot instruction is removed');
+  assert.equal(cleaned.pending,0,'the cleanup queue is drained');
+  assert.deepEqual(cleaned.scriptstate,{$keep:'yes'},'chat state survives the cleanup write');
+  await page.evaluate(()=>testHost.open());
+  await page.getByLabel('상황극 검색').waitFor();
+  await page.getByRole('button',{name:/^◷ 최근/}).click();
+  await page.locator('.pick').filter({hasText:'The Unending Authentication'}).first().click();
+  await page.getByLabel('간략한 상황극 줄거리').waitFor();
+  await page.getByLabel('응답 후 지침 자동 삭제').uncheck();
+  await page.getByRole('button',{name:'보관함으로'}).click();
+
   await page.evaluate(()=>testHost.open());
   await page.getByRole('button',{name:/^◷ 최근/}).click();
   await page.locator('.pick').filter({hasText:'The Unending Authentication'}).first().click();
@@ -228,7 +254,7 @@ const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.re
   assert.match(await page.getByLabel('상황극 서고 수집 범위').innerText(),/탭 확인 2026-09-17/,'seed restores crawl coverage');
 
   assert.deepEqual(errors,[]);
-  results.push({width,pass:true,checks:['cache-only-open','module-canonical-save','module-cache-refresh','bundled-module-seed','compact-storage','cache-clear-preserves-module','storage-free-seed-rebuild','load-more','auto-load-on-scroll','adult-filter-both-ways','favorites','recent','search-summary','save','folder','literal-regex','source-preserved','mobile-overflow','input-card','one-tap-add','no-auto-generation','duplicate-click','mode-memory','concurrent-edit','chat-menu-location','badge-survives-sanitiser','badge-legible-at-20px','chat-menu-row-opens']});
+  results.push({width,pass:true,checks:['cache-only-open','module-canonical-save','module-cache-refresh','bundled-module-seed','compact-storage','cache-clear-preserves-module','storage-free-seed-rebuild','load-more','auto-load-on-scroll','adult-filter-both-ways','favorites','recent','search-summary','save','folder','literal-regex','source-preserved','mobile-overflow','input-card','one-tap-add','no-auto-generation','duplicate-click','one-shot-auto-clean','mode-memory','concurrent-edit','chat-menu-location','badge-survives-sanitiser','badge-legible-at-20px','chat-menu-row-opens']});
   await page.close();
  }
  fs.writeFileSync(path.join(__dirname,'../artifacts/browser-results.json'),JSON.stringify(results,null,2));console.log(JSON.stringify(results,null,2));
