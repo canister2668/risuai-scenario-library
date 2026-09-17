@@ -8,6 +8,8 @@
 (function (root) {
   'use strict';
   const MODULE_ID = '4e97d516-4b97-45bc-b0b2-1e0cd0a4c34a';
+  const MODULE_NAMESPACE = 'risuai-scenario-library';
+  const MODULE_NAME = '상황극 서고';
   const DEFAULTS = ['일상·코미디', '로맨스', '갈등·화해', '사건·모험', '성인', '기타'];
   const clone = value => JSON.parse(JSON.stringify(value));
   const base = () => ({key:'', secondkey:'', insertorder:100, alwaysActive:false, selective:false, mode:'normal', bookVersion:2});
@@ -80,9 +82,14 @@
     return result;
   }
   function newModule(seed) {
-    const mod={id:MODULE_ID, name:'상황극 서고', description:'상황극 지침 저장소. 상황극 탐색기에서 검색하고 선택해 현재 채팅에 넣습니다. 자동 발동하지 않습니다.',
+    const mod={id:MODULE_ID, namespace:MODULE_NAMESPACE, name:MODULE_NAME, description:'상황극 지침 저장소. 상황극 탐색기에서 검색하고 선택해 현재 채팅에 넣습니다. 자동 발동하지 않습니다.',
       lorebook:DEFAULTS.map((name,i) => folder(name, 'scenario-folder-' + i))};
     return hydrateSeed(mod,seed);
+  }
+  function isLibraryModule(mod) {
+    if(!mod || !Array.isArray(mod.lorebook))return false;
+    if(mod.namespace===MODULE_NAMESPACE || mod.id===MODULE_ID)return true;
+    return mod.name===MODULE_NAME && mod.lorebook.some(item=>item?.mode==='folder' && item?.key==='\uf000folder:scenario-folder-0');
   }
   function folders(mod) { return mod.lorebook.filter(x => x.mode === 'folder'); }
   function entries(mod) { return mod.lorebook.filter(x => x.mode !== 'folder'); }
@@ -148,8 +155,8 @@
       return clone(db.modules);
     }
     find(modules) {
-      const found=modules.filter(x=>x.id===MODULE_ID);
-      if(found.length>1) throw new Error('보관함 모듈 ID가 중복되어 있습니다. 모듈 설정에서 확인해 주세요.');
+      const found=modules.filter(isLibraryModule);
+      if(found.length>1) throw new Error('상황극 서고 모듈이 중복되어 있습니다. 모듈 설정에서 확인해 주세요.');
       const mod=found[0];
       if(mod && !Array.isArray(mod.lorebook)) throw new Error('보관함의 로어북 형식이 올바르지 않습니다.');
       return mod;
@@ -165,7 +172,7 @@
         if(mod && JSON.stringify(mod)===JSON.stringify(next)) return mod;
         const fresh=await this.readModules();
         if(JSON.stringify(fresh)!==JSON.stringify(modules)) throw new Error('모듈이 변경되었습니다. 다시 저장해 주세요.');
-        const idx=modules.findIndex(x=>x.id===MODULE_ID);
+        const idx=mod ? modules.findIndex(x=>x.id===mod.id) : -1;
         if(idx<0)modules.push(next);else modules[idx]=next;
         await this.api.setDatabaseLite({modules});
         const saved=await this.read();
@@ -214,7 +221,7 @@
       throw new Error('추가 결과를 확인하지 못했습니다. 채팅을 확인한 뒤 다시 시도해 주세요.');
     return {duplicate:false};
   }
-  root.ScenarioCore = {MODULE_ID, DEFAULTS, clone, folder, folders, entries, normalizeCoverage, mergeCoverage, cleanInput,
+  root.ScenarioCore = {MODULE_ID, MODULE_NAMESPACE, MODULE_NAME, DEFAULTS, clone, folder, folders, entries, isLibraryModule, normalizeCoverage, mergeCoverage, cleanInput,
     seedEntry,sourceId,sourceMeta,decorateEntry,standardizeModule,hydrateSeed,newModule,suggestTitle,convert,append,validateImport,
     importEntries,saveEntry,Repository,chatContext,addUserMessage};
   if(typeof module !== 'undefined' && module.exports) module.exports=root.ScenarioCore;
@@ -238,7 +245,7 @@ const SCENARIO_SEED = {"format":"scenario-library-seed","version":27289072451776
     async raw(key){return api.pluginStorage.getItem(key);}
     async read(){
       const mod=this.catalog||parseStored(await this.raw(CATALOG_KEY),null);
-      if(!mod||mod.id!==C.MODULE_ID||!Array.isArray(mod.lorebook))throw new Error('상황극 보관함 목록을 읽지 못했습니다.');
+      if(!C.isLibraryModule(mod))throw new Error('상황극 보관함 목록을 읽지 못했습니다.');
       return C.clone(mod);
     }
     async store(key,value){await api.pluginStorage.setItem(key,typeof value==='string'?value:JSON.stringify(value));}
@@ -260,7 +267,7 @@ const SCENARIO_SEED = {"format":"scenario-library-seed","version":27289072451776
     }
     async initialize(){
       const existing=parseStored(await this.raw(CATALOG_KEY),null);
-      if(existing?.id===C.MODULE_ID&&Array.isArray(existing.lorebook)){this.catalog=existing;await this.removeLegacy();return this.read();}
+      if(C.isLibraryModule(existing)){this.catalog=existing;await this.removeLegacy();return this.read();}
       const legacy=parseStored(await this.raw(LEGACY_CATALOG_KEY),null);
       const installed=await this.canonical.read();
       if(!installed && !(SCENARIO_SEED.entries||[]).some(item=>String(item.content||'').trim()))
@@ -283,7 +290,7 @@ const SCENARIO_SEED = {"format":"scenario-library-seed","version":27289072451776
         working.scenarioLibraryCoverage=this.catalog?.scenarioLibraryCoverage||SCENARIO_SEED.coverage||null;
         for(const item of C.entries(working)){const old=metadata.get(item.id);if(old?.scenarioLibrarySummary)item.scenarioLibrarySummary=old.scenarioLibrarySummary;if(old?.scenarioLibrarySource)item.scenarioLibrarySource=C.clone(old.scenarioLibrarySource);}
         const next=transform(working);
-        if(!next||next.id!==C.MODULE_ID||!Array.isArray(next.lorebook))throw new Error('보관함 변경 결과가 올바르지 않습니다.');
+        if(!C.isLibraryModule(next))throw new Error('보관함 변경 결과가 올바르지 않습니다.');
         nextCatalog=this.decorate(next,next);return C.standardizeModule(next);
       });
       this.full=saved;this.catalog=this.decorate(saved,nextCatalog);this.catalog.scenarioLibraryCoverage=nextCatalog?.scenarioLibraryCoverage||this.catalog.scenarioLibraryCoverage;

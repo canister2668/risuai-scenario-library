@@ -13,7 +13,7 @@
     async raw(key){return api.pluginStorage.getItem(key);}
     async read(){
       const mod=this.catalog||parseStored(await this.raw(CATALOG_KEY),null);
-      if(!mod||mod.id!==C.MODULE_ID||!Array.isArray(mod.lorebook))throw new Error('상황극 보관함 목록을 읽지 못했습니다.');
+      if(!C.isLibraryModule(mod))throw new Error('상황극 보관함 목록을 읽지 못했습니다.');
       return C.clone(mod);
     }
     async store(key,value){await api.pluginStorage.setItem(key,typeof value==='string'?value:JSON.stringify(value));}
@@ -35,7 +35,7 @@
     }
     async initialize(){
       const existing=parseStored(await this.raw(CATALOG_KEY),null);
-      if(existing?.id===C.MODULE_ID&&Array.isArray(existing.lorebook)){this.catalog=existing;await this.removeLegacy();return this.read();}
+      if(C.isLibraryModule(existing)){this.catalog=existing;await this.removeLegacy();return this.read();}
       const legacy=parseStored(await this.raw(LEGACY_CATALOG_KEY),null);
       const installed=await this.canonical.read();
       if(!installed && !(SCENARIO_SEED.entries||[]).some(item=>String(item.content||'').trim()))
@@ -58,7 +58,7 @@
         working.scenarioLibraryCoverage=this.catalog?.scenarioLibraryCoverage||SCENARIO_SEED.coverage||null;
         for(const item of C.entries(working)){const old=metadata.get(item.id);if(old?.scenarioLibrarySummary)item.scenarioLibrarySummary=old.scenarioLibrarySummary;if(old?.scenarioLibrarySource)item.scenarioLibrarySource=C.clone(old.scenarioLibrarySource);}
         const next=transform(working);
-        if(!next||next.id!==C.MODULE_ID||!Array.isArray(next.lorebook))throw new Error('보관함 변경 결과가 올바르지 않습니다.');
+        if(!C.isLibraryModule(next))throw new Error('보관함 변경 결과가 올바르지 않습니다.');
         nextCatalog=this.decorate(next,next);return C.standardizeModule(next);
       });
       this.full=saved;this.catalog=this.decorate(saved,nextCatalog);this.catalog.scenarioLibraryCoverage=nextCatalog?.scenarioLibraryCoverage||this.catalog.scenarioLibraryCoverage;
