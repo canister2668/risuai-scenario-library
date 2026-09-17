@@ -8,11 +8,18 @@
 
 - 공식 웹 RisuAI용 설치 파일: [최신 GitHub Release](https://github.com/canister2668/risuai-scenario-library/releases/latest/download/scenario-library.plugin.js)
 - 상황극 서고 모듈: [Proton Drive 공유 폴더](https://drive.proton.me/urls/T67TA9HZ6R#SMKnYZym7F70)
-- 현재 버전: `1.1.1`
+- 현재 버전: `1.1.2`
 - 업데이트 주소: `https://raw.githubusercontent.com/canister2668/risuai-scenario-library/main/update/scenario-library.plugin.js`
 
 Proton Drive에서 상황극 서고 모듈을 받아 모듈 설정에서 먼저 가져오고, GitHub Release의 `scenario-library.plugin.js`를 플러그인 설정에서 가져옵니다. 이후에는 RisuAI가 파일 상단의
 `//@update-url`을 확인하여 새 버전을 표시합니다. GitHub Release에는 플러그인과 `SHA256SUMS`만 제공합니다.
+
+### 버전 확인과 업데이트 알림
+
+- RisuAI **플러그인 탭**에는 `상황극 탐색기 v1.1.2`처럼 표시 이름에 버전이 함께 나옵니다.
+- 탐색기 목록 맨 아래의 `상황극 탐색기 v1.1.2`를 누르면 **버전 정보** 창이 열리고, 거기서 **업데이트 확인**을 직접 실행할 수 있습니다. 같은 항목이 `⋯` 메뉴에도 있습니다.
+- 보관함을 열 때 최대 6시간에 한 번 업데이트 주소의 헤더만 읽어 새 버전을 확인합니다. 새 버전이 있으면 목록 위에 알림 띠가 뜨고, `확인함`을 누르면 그 버전에 대해서만 숨겨집니다. 다음 버전이 나오면 다시 알립니다.
+- 확인에 실패하거나 오프라인이어도 보관함은 그대로 열리며, 알림은 조용히 숨겨집니다. 실제 설치와 업데이트는 RisuAI 플러그인 설정에서 진행합니다.
 
 ## 사용 흐름
 
@@ -120,6 +127,10 @@ node scenario-library/tests/full-import.cjs
 API v3 선언과 실제 채팅 메뉴·아이콘 렌더러를 대조합니다. 배포용
 `dist/scenario-library.plugin.js`는 모듈과 함께 설치하는 순정 웹용 소형 설치본입니다. 본문까지 내장해 플러그인 하나로 모듈을 만들 수 있는
 `dist/scenario-library-standalone.plugin.js`는 복구·개발용이며 일반 배포에는 사용하지 않습니다.
+
+`tests/update-notice.cjs`는 배포 번들(`dist/scenario-library.plugin.js`)을 그대로 띄우고 업데이트 서버만 가짜로 바꿔,
+구버전 응답에는 침묵하는지, 새 버전에서 알림 띠와 버전 정보 창이 뜨는지, `확인함`이 그 버전에만 적용되는지,
+다음 버전에서 다시 알리는지, 서버에 닿지 못해도 보관함이 열리는지를 확인합니다.
 
 브라우저 검사는 진입 버튼이 실제로 그려지는 경로부터 확인합니다. 공식 클라이언트에서 채팅 입력창 오른쪽
 버튼은 `DefaultChatScreen.svelte`의 자체 메뉴를 열고, 그 메뉴는 `additionalChatMenu`만 훑습니다. 그래서

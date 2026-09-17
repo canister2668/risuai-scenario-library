@@ -103,6 +103,59 @@
     }catch(e){console.warn('[scenario-library] auto-clean',e);}
     finally{cleaning=false;}
   }
+  // Version display and update detection. The bundle carries its own version,
+  // and the published update file states the newest one in its header.
+  const VERSION=typeof PLUGIN_VERSION==='string'?PLUGIN_VERSION:'';
+  const UPDATE_URL=typeof PLUGIN_UPDATE_URL==='string'?PLUGIN_UPDATE_URL:'';
+  const UPDATE_STATE_KEY='scenario.v1.update';
+  const UPDATE_INTERVAL=6*3600*1000;
+  const canCheckUpdate=Boolean(UPDATE_URL)&&typeof api.nativeFetch==='function';
+  let updateState={latest:'',checkedAt:0};
+  let redrawUpdateNotice=()=>{};
+  // Reads only the header of the published file. Failure is silent: an offline
+  // client must still open the library, so the notice simply stays hidden.
+  async function checkUpdate(force=false){
+    if(!canCheckUpdate)return updateState;
+    if(!force&&Date.now()-(updateState.checkedAt||0)<UPDATE_INTERVAL)return updateState;
+    const response=await api.nativeFetch(UPDATE_URL+'?at='+Date.now(),{method:'GET',cache:'no-store'});
+    if(!response?.ok)throw new Error('업데이트 서버에 연결하지 못했습니다. 잠시 뒤 다시 시도해 주세요.');
+    const latest=C.headerVersion(await response.text());
+    if(!latest)throw new Error('업데이트 서버가 버전을 알려주지 않았습니다.');
+    updateState={latest,checkedAt:Date.now()};
+    await store(UPDATE_STATE_KEY,updateState);
+    return updateState;
+  }
+  const updateAvailable=()=>canCheckUpdate&&C.compareVersions(VERSION,updateState.latest)===1;
+  function updateNotice(){
+    const box=el('div',{class:'update-notice',role:'status'});
+    redrawUpdateNotice=()=>{
+      // Dismissal is per version, so the next release speaks up again.
+      box.replaceChildren();box.hidden=!updateAvailable()||updateState.dismissed===updateState.latest;
+      if(box.hidden)return;
+      box.append(el('span',{class:'update-dot','aria-hidden':'true'},'↑'),
+        el('div',{class:'update-copy'},el('strong',{},`새 버전 v${updateState.latest}이 나왔습니다`),
+          el('small',{},`설치된 버전은 v${VERSION}입니다. RisuAI 플러그인 설정에서 업데이트할 수 있습니다.`)),
+        button('확인함',()=>{updateState={...updateState,dismissed:updateState.latest};redrawUpdateNotice();return store(UPDATE_STATE_KEY,updateState);},'link'));
+    };
+    redrawUpdateNotice();return box;
+  }
+  async function openAbout(){
+    const dialog=el('dialog',{class:'dialog','aria-label':'상황극 탐색기 정보'});
+    const status=el('p',{class:'muted update-status','aria-live':'polite'});
+    const sync=()=>{status.textContent=!canCheckUpdate?'이 환경에서는 자동 확인을 사용할 수 없습니다. RisuAI 플러그인 설정에서 확인해 주세요.'
+      :!updateState.checkedAt?'아직 확인하지 않았습니다.'
+      :updateAvailable()?`새 버전 v${updateState.latest}을 사용할 수 있습니다.`
+      :`최신 버전입니다. (확인 ${new Date(updateState.checkedAt).toLocaleString('ko')})`;};
+    sync();
+    const check=button('업데이트 확인',async()=>{await checkUpdate(true);sync();redrawUpdateNotice();
+      toast(updateAvailable()?`새 버전 v${updateState.latest}이 있습니다.`:'이미 최신 버전입니다.');},'primary');
+    check.disabled=!canCheckUpdate;
+    dialog.append(el('h2',{},'상황극 탐색기'),
+      el('div',{class:'about-version'},el('strong',{},`v${VERSION}`),el('span',{class:'muted'},'설치된 버전')),
+      status,
+      el('div',{class:'row end'},check,button('닫기',()=>dialog.close())));
+    dialog.addEventListener('close',()=>dialog.remove());document.body.append(dialog);dialog.showModal();
+  }
   let preferenceQueue=Promise.resolve(), draftTimer, listObserver=null, lastPage=null;
   let autoLoadArmed=false, syncChipCounts=()=>{},tryAutoLoad=()=>{};
   const armAutoLoad=()=>{autoLoadArmed=true;requestAnimationFrame(()=>tryAutoLoad());};
@@ -174,6 +227,8 @@
       delete state.prefs.autoClean;
       if(!['newest','title','oldest'].includes(state.prefs.sort))state.prefs.sort='newest';
       if(!['all','hide','only'].includes(state.prefs.adult))state.prefs.adult='all';
+      const storedUpdate=await load(UPDATE_STATE_KEY,null);
+      if(storedUpdate&&typeof storedUpdate.latest==='string')updateState={latest:storedUpdate.latest,checkedAt:Number(storedUpdate.checkedAt)||0,dismissed:storedUpdate.dismissed};
       state.context=await context();state.undo=null;pendingAdd=null;
       const saved=await load('scenario.v1.context.'+state.context,{});
       state.mode=!!saved.mode;state.target=typeof saved.target==='string'?saved.target:'';state.compose=typeof saved.compose==='string'?saved.compose:'';
@@ -183,6 +238,8 @@
       state.query='';
       if(!['all','favorites','recent'].includes(state.filter)&&!C.folders(state.mod).some(f=>f.key===state.filter))state.filter='all';
       render();
+      // Never block opening on the network; the notice appears once the answer lands.
+      checkUpdate().then(()=>redrawUpdateNotice()).catch(e=>console.warn('[scenario-library] update check',e));
     }catch(e){root.replaceChildren(shell('상황극 탐색기',null,[exitButton()]),el('div',{class:'panel'},el('div',{class:'bar'},button('다시 시도',open,'primary'),exitButton())));error(e);}
   }
   // One shell, four screens. The header is the only chrome that survives a page
@@ -331,9 +388,12 @@
       :newest?`저장된 최신 후보 #${newest.scenarioLibrarySource.sourceArticleId} (${newest.scenarioLibrarySource.createdAt.slice(0,10)}) · 탭 전체 확인 기록 없음`:'수집 기록 없음';
     root.append(el('p',{class:'coverage muted','aria-label':'상황극 서고 수집 범위'},coverageText));
 
+    root.append(updateNotice());
     if(state.draft)root.append(el('div',{class:'notice'},'작성 중인 상황극이 있습니다. ',button('이어서 작성',()=>goto('edit'),'link')));
     root.append(list,more);
     root.append(el('p',{class:'muted foot-note'},'보관함의 상황극은 자동 발동하지 않습니다. 여기서 고른 지침만 현재 채팅에 들어갑니다.'));
+    root.append(el('p',{class:'muted foot-note version-line'},
+      button(`상황극 탐색기 v${VERSION}`+(updateAvailable()?` · 새 버전 v${updateState.latest}`:''),openAbout,'link'+(updateAvailable()?' update-link':''))));
     if(state.compose.trim())root.append(el('div',{class:'bar draft-bar'},
       button(`작성 중인 인풋카드 ${state.compose.trim().length}자 이어서 쓰기`,()=>goto('compose'),'primary')));
     refresh();
@@ -418,6 +478,7 @@
       ['보관함 백업',backup],
       ['모듈에서 새로고침',refreshFromModule],
       ['저장소 관리',openStorageManager],
+      [updateAvailable()?`버전 정보 · 새 버전 v${updateState.latest}`:`버전 정보 · v${VERSION}`,openAbout],
       ['보관함 닫기',exitNow],
     ].filter(Boolean);
     const sheet=el('dialog',{class:'dialog sheet','aria-label':'보관함 메뉴'});

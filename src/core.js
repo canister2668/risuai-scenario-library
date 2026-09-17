@@ -274,6 +274,26 @@
       throw new Error('지침 정리 결과를 확인하지 못했습니다. 채팅을 확인해 주세요.');
     return {resolved:true,mode};
   }
+  // Update detection. The published plugin carries its version in a header
+  // comment, so the update server can be compared without a manifest endpoint.
+  function parseVersion(value) {
+    const match=String(value||'').match(/^\s*(\d+)\.(\d+)\.(\d+)/);
+    return match?[Number(match[1]),Number(match[2]),Number(match[3])]:null;
+  }
+  function headerVersion(text) {
+    // Only the header block counts; a version string further down the bundle
+    // would be plugin content, not the published version.
+    const head=String(text||'').slice(0,2048);
+    const match=head.match(/^\/\/@version\s+(\S+)\s*$/m);
+    return match?match[1].trim():'';
+  }
+  // Returns 1 when next is newer, -1 when older, 0 when equal or uncomparable.
+  function compareVersions(current, next) {
+    const a=parseVersion(current),b=parseVersion(next);
+    if(!a||!b)return 0;
+    for(let i=0;i<3;i+=1){if(b[i]>a[i])return 1;if(b[i]<a[i])return -1;}
+    return 0;
+  }
   // Backup scopes keep the folder skeleton so the export stays an importable module.
   function filterModule(mod, keep) {
     const result=clone(mod);
@@ -282,6 +302,6 @@
   }
   root.ScenarioCore = {MODULE_ID, MODULE_NAMESPACE, MODULE_NAME, DEFAULTS, clone, folder, folders, entries, isLibraryModule, normalizeCoverage, mergeCoverage, cleanInput,
     seedEntry,sourceId,sourceMeta,decorateEntry,standardizeModule,hydrateSeed,newModule,suggestTitle,convert,append,validateImport,
-    importEntries,saveEntry,Repository,chatContext,addUserMessage,estimateTokens,ONE_SHOT_MODES,oneShotMode,oneShotResult,resolveOneShot,filterModule};
+    importEntries,saveEntry,Repository,chatContext,addUserMessage,estimateTokens,parseVersion,headerVersion,compareVersions,ONE_SHOT_MODES,oneShotMode,oneShotResult,resolveOneShot,filterModule};
   if(typeof module !== 'undefined' && module.exports) module.exports=root.ScenarioCore;
 })(globalThis);

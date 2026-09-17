@@ -27,7 +27,7 @@ const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.re
     pluginStorage:{getItem:async k=>{if(k==='scenario.v4.catalog'&&h.delayCatalog)await new Promise(resolve=>h.releaseCatalog=resolve);return storage[k]??null;},setItem:async(k,v)=>{storage[k]=v},removeItem:async k=>{delete storage[k]},keys:async()=>Object.keys(storage),length:async()=>Object.keys(storage).length,clear:async()=>{for(const key of Object.keys(storage))delete storage[key]}},
     requestPluginPermission:async permission=>{h.permissionRequests.push({permission,shows:h.shows});return true},
     showContainer:async()=>{h.shows++;document.body.style.display=''},hideContainer:async()=>{h.hides++;document.body.style.display='none'},
-    registerButton:async(arg,cb)=>{h.buttonConfig=structuredClone(arg);h.open=cb;return{id:'button'}},registerSetting:async()=>({id:'setting'}),onUnload:async()=>{},unregisterUIPart:async id=>{h.unregistered.push(id)},sendChat:async()=>{h.sends++},addRisuChatListener:async(mode,fn)=>{h.outputListeners.push(fn)}
+    registerButton:async(arg,cb)=>{h.buttonConfig=structuredClone(arg);h.open=cb;return{id:'button'}},registerSetting:async()=>({id:'setting'}),onUnload:async()=>{},unregisterUIPart:async id=>{h.unregistered.push(id)},sendChat:async()=>{h.sends++},addRisuChatListener:async(mode,fn)=>{h.outputListeners.push(fn)},nativeFetch:async url=>{h.fetched=(h.fetched||[]).concat(url);return{ok:true,text:async()=>h.updateBody??''}}
    };
   },{storage:storageFixture,module:moduleFixture});
   await page.addScriptTag({content:plugin});await page.waitForFunction(()=>!!window.testHost.open);
@@ -266,6 +266,18 @@ const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.re
   await page.getByRole('button',{name:'검색어 지우기'}).click();
   await history.getByRole('button',{name:'기록 지우기'}).click();
   assert.equal(await history.isVisible(),false,'clearing the history empties the chip row');
+
+  // The installed version is always visible, and the runtime bundle ships without
+  // an update URL, so it must not claim to check anything.
+  const versionLine=page.locator('.version-line button');
+  assert.equal(await versionLine.innerText(),`상황극 탐색기 v${require('../package.json').version}`);
+  assert.equal(await page.evaluate(()=>testHost.fetched?.length||0),0,'a bundle without an update URL never calls out');
+  await versionLine.click();
+  const about=page.getByRole('dialog',{name:'상황극 탐색기 정보'});await about.waitFor();
+  assert.match(await about.innerText(),new RegExp(`v${require('../package.json').version.replace(/\./g,'\\.')}`));
+  assert.match(await about.innerText(),/자동 확인을 사용할 수 없습니다/,'no update URL means no check offer');
+  assert.equal(await about.getByRole('button',{name:'업데이트 확인'}).isDisabled(),true);
+  await about.getByRole('button',{name:'닫기'}).click();
 
   // Backup offers scopes and a filtered export stays an importable module.
   await page.evaluate(()=>{testHost.downloads=[];const create=URL.createObjectURL;URL.createObjectURL=blob=>{blob.text().then(text=>testHost.downloads.push(text));return create.call(URL,blob);};});

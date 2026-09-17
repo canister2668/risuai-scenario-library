@@ -31,7 +31,7 @@ test('the distributable uses only declared stock API v3 surfaces',()=>{
   const expected=[...new Set(used)].sort();
   assert.deepEqual(expected,[
     'addRisuChatListener','getCharacter','getCharacterFromIndex','getChatFromIndex','getCurrentCharacterIndex',
-    'getCurrentChatIndex','getDatabase','hideContainer','onUnload','pluginStorage',
+    'getCurrentChatIndex','getDatabase','hideContainer','nativeFetch','onUnload','pluginStorage',
     'registerButton','registerSetting','requestPluginPermission','setChatToIndex','setDatabaseLite','showContainer',
     'unregisterUIPart'
   ]);
@@ -41,7 +41,10 @@ test('the distributable uses only declared stock API v3 surfaces',()=>{
   }
   const plugin=fs.readFileSync(path.join(root,'dist','scenario-library.plugin.js'),'utf8');
   const version=require('../package.json').version;
-  assert.match(plugin,new RegExp('^//\\@name scenario_library\\n//\\@display-name 상황극 탐색기\\n//\\@api 3\\.0\\n//\\@version '+version.replace(/\\./g,'\\\\.')+'\\n'));
+  const escaped=version.replace(/\./g,'\\.');
+  // The plugin tab shows only the display name, so the version has to ride along there.
+  assert.match(plugin,new RegExp('^//\\@name scenario_library\\n//\\@display-name 상황극 탐색기 v'+escaped+'\\n//\\@api 3\\.0\\n//\\@version '+escaped+'\\n'));
+  assert.match(plugin,new RegExp('\\nconst PLUGIN_VERSION = "'+escaped+'";\\n'),'the runtime can show its own version');
   assert.match(plugin,/\/\/@update-url https:\/\/raw\.githubusercontent\.com\/canister2668\/risuai-scenario-library\/main\/update\/scenario-library\.plugin\.js\n/);
   assert.equal(plugin,fs.readFileSync(path.join(root,'update','scenario-library.plugin.js'),'utf8'));
 });

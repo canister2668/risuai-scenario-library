@@ -3,7 +3,9 @@ const root=__dirname,read=p=>fs.readFileSync(path.join(root,p),'utf8');
 const pkg=JSON.parse(read('package.json'));
 const seed=JSON.parse(read('src/seed.json'));
 const UPDATE_URL='https://raw.githubusercontent.com/canister2668/risuai-scenario-library/main/update/scenario-library.plugin.js';
-const make=(version,bundledSeed,updateURL='')=>'//@name scenario_library\n//@display-name 상황극 탐색기\n//@api 3.0\n//@version '+version+'\n'+(updateURL?'//@update-url '+updateURL+'\n':'')+'\n'+read('src/core.js')+'\n{\nconst STYLE = '+JSON.stringify(read('src/style.css'))+';\nconst SCENARIO_SEED = '+JSON.stringify(bundledSeed)+';\n'+read('src/app.js')+'\n}\n';
+// The plugin tab lists modules by their display name only, so the version goes
+// there; the runtime also needs it to show and compare versions inside the app.
+const make=(version,bundledSeed,updateURL='')=>'//@name scenario_library\n//@display-name 상황극 탐색기 v'+version+'\n//@api 3.0\n//@version '+version+'\n'+(updateURL?'//@update-url '+updateURL+'\n':'')+'\n'+read('src/core.js')+'\n{\nconst STYLE = '+JSON.stringify(read('src/style.css'))+';\nconst PLUGIN_VERSION = '+JSON.stringify(version)+';\nconst PLUGIN_UPDATE_URL = '+JSON.stringify(updateURL)+';\nconst SCENARIO_SEED = '+JSON.stringify(bundledSeed)+';\n'+read('src/app.js')+'\n}\n';
 fs.mkdirSync(path.join(root,'dist'),{recursive:true});
 const runtimeSeed={...seed,entries:seed.entries.map(({content,...item})=>({...item,content:''}))};
 const output=make(pkg.version,runtimeSeed,UPDATE_URL);

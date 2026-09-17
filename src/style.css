@@ -185,6 +185,23 @@ select.mini{width:auto;min-height:40px;padding:6px 8px;font-size:13px;border-rad
 .clean-copy small{color:var(--dim);font-size:12px;line-height:1.5}
 .clean-row select{width:auto;min-width:132px;flex:none;min-height:40px;padding:6px 8px;font-size:13px;border-radius:11px;background:#221c30}
 
+/* ---- version + update ---- */
+.update-notice{display:flex;gap:11px;align-items:center;margin:0 12px;padding:12px 14px;
+  border:1px solid #5b4a2e;border-radius:14px;background:linear-gradient(135deg,#3a2f1f 0%,#302719 100%)}
+.update-dot{flex:none;width:26px;height:26px;display:grid;place-items:center;border-radius:9px;
+  background:linear-gradient(135deg,#f5d79a 0%,#d8a944 100%);color:#2e2210;font-size:14px;font-weight:700}
+.update-copy{display:grid;gap:2px;min-width:0;flex:1}
+.update-copy strong{font-size:14px;color:#f3e2c2}
+.update-copy small{color:#c6b391;font-size:12px;line-height:1.5}
+.update-notice button.link{color:#e9d3a6;flex:none}
+.version-line{padding:0 6px}
+.version-line button.link{font-size:12px;color:#8b819e}
+.version-line button.link:hover{color:#cdb3ee}
+.version-line .update-link{color:#e6c987;font-weight:600}
+.about-version{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:14px;
+  border:1px solid var(--line);border-radius:14px;background:var(--raised)}
+.about-version strong{font-size:25px;font-variant-numeric:tabular-nums}
+
 /* ---- search history ---- */
 .chips.history{padding:8px 0 0;flex-wrap:wrap}
 .history-chip{min-height:34px;padding:5px 12px;font-size:13px;background:#201b2c;color:#cbc0dd}
