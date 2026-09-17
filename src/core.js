@@ -6,6 +6,20 @@
   const clone = value => JSON.parse(JSON.stringify(value));
   const base = () => ({key:'', secondkey:'', insertorder:100, alwaysActive:false, selective:false, mode:'normal', bookVersion:2});
   const folder = (name, id) => ({...base(), mode:'folder', key:'\uf000folder:' + id, comment:name, content:'', id});
+  function normalizeCoverage(value) {
+    if(!value || value.source!=='arca.live')return null;
+    const scannedAt=typeof value.scannedAt==='string'?value.scannedAt:'';
+    const newestArticleId=String(value.newestArticleId||'').trim();
+    const newestCreatedAt=typeof value.newestCreatedAt==='string'?value.newestCreatedAt:'';
+    if(!scannedAt||!newestArticleId||!newestCreatedAt)return null;
+    return {source:'arca.live',board:value.board||'characterai',category:value.category||'로어북',scannedAt,
+      newestArticleId,newestCreatedAt,checkedArticles:Math.max(0,Number(value.checkedArticles)||0)};
+  }
+  function mergeCoverage(current,next) {
+    const a=normalizeCoverage(current),b=normalizeCoverage(next);
+    if(!a)return b;if(!b)return a;
+    return Date.parse(b.scannedAt)>=Date.parse(a.scannedAt)?b:a;
+  }
   function cleanInput(value) {
     let text=String(value||'').replace(/[\u200B-\u200D\u2060\uFEFF]/g,'').replace(/\u00a0/g,' ').replace(/\r\n?/g,'\n')
       .replace(/[ \t]+\n/g,'\n').replace(/\n[ \t]+/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
@@ -22,27 +36,42 @@
     return text.replace(/[ \t]+\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
   }
   function seedEntry(item, folderKey) {
-    return {...base(),id:'scenario-arca-'+item.sourceArticleId,comment:item.title,content:item.content,folder:folderKey,
-      scenarioLibrarySummary:item.summary||'',scenarioLibrarySource:{source:'arca.live',sourceArticleId:String(item.sourceArticleId),
-        sourceUrl:item.sourceUrl,author:item.author||null,createdAt:item.createdAt||null,isSensitive:Boolean(item.isSensitive),
-        importedAt:item.collectedAt||null,rawHtmlSha256:item.rawHtmlSha256||null}};
+    return {...base(),id:'scenario-arca-'+item.sourceArticleId,comment:item.title,content:cleanInput(item.content),folder:folderKey};
+  }
+  function sourceId(item) {
+    const explicit=String(item?.scenarioLibrarySource?.sourceArticleId||'').trim();
+    if(explicit)return explicit;
+    const match=String(item?.id||'').match(/^scenario-arca-(\d+)$/);return match?.[1]||'';
+  }
+  function sourceMeta(item, importedAt=null) {
+    const id=String(item.sourceArticleId||'').trim();
+    return {source:'arca.live',sourceArticleId:id,sourceUrl:item.sourceUrl||`https://arca.live/b/characterai/${id}`,
+      author:item.author||null,createdAt:item.createdAt||null,isSensitive:Boolean(item.isSensitive),
+      importedAt:item.collectedAt||importedAt||null,rawHtmlSha256:item.rawHtmlSha256||null};
+  }
+  function decorateEntry(entry,item,importedAt=null) {
+    const result=clone(entry);result.scenarioLibrarySummary=item.summary||'';result.scenarioLibrarySource=sourceMeta(item,importedAt);return result;
+  }
+  function standardizeModule(mod) {
+    const result=clone(mod);
+    delete result.scenarioLibraryCoverage;delete result.scenarioLibrarySeedVersion;delete result.scenarioLibraryStorage;
+    for(const item of result.lorebook||[]){delete item.scenarioLibrarySummary;delete item.scenarioLibrarySource;}
+    return result;
   }
   function hydrateSeed(mod, seed={version:0,entries:[]}) {
-    const result=clone(mod), version=Number(seed.version)||0;
-    if(result.scenarioLibrarySeedVersion===version)return result;
+    const result=standardizeModule(mod);
     const byName=new Map(folders(result).map(item=>[item.comment,item]));
     DEFAULTS.forEach((name,index)=>{if(!byName.has(name)){const item=folder(name,'scenario-folder-'+index);result.lorebook.push(item);byName.set(name,item);}});
-    const existingBySource=new Map(entries(result).flatMap(item=>{
-      const id=String(item.scenarioLibrarySource?.sourceArticleId||'');return id?[[id,item]]:[];
-    }));
+    const existingBySource=new Map(entries(result).flatMap(item=>{const id=sourceId(item);return id?[[id,item]]:[];}));
     for(const item of seed.entries||[]){
       const sourceId=String(item.sourceArticleId||'');if(!sourceId)continue;
       const existing=existingBySource.get(sourceId);
       if(existing)continue;
+      if(!String(item.content||'').trim())continue;
       const target=byName.get(item.category)||byName.get('기타');result.lorebook.push(seedEntry(item,target.key));
       existingBySource.set(sourceId,result.lorebook.at(-1));
     }
-    result.scenarioLibrarySeedVersion=version;return result;
+    return result;
   }
   function newModule(seed) {
     const mod={id:MODULE_ID, name:'상황극 서고', description:'상황극 지침 저장소. 상황극 탐색기에서 검색하고 선택해 현재 채팅에 넣습니다. 자동 발동하지 않습니다.',
@@ -77,22 +106,18 @@
         selected:item.selected!==false,candidate:Boolean(item.candidate)};
     });
   }
-  function importEntries(mod, items, folderKey) {
+  function importEntries(mod, items, folderKey, coverage=null) {
     const result=clone(mod);
     if(!folders(result).some(item=>item.key===folderKey)) throw new Error('가져올 폴더가 변경되었습니다. 다시 선택해 주세요.');
-    const known=new Set(entries(result).flatMap(item=>{
-      const source=item.scenarioLibrarySource;
-      return source?.source==='arca.live' && source.sourceArticleId ? [String(source.sourceArticleId)] : [];
-    }));
+    const known=new Set(entries(result).map(sourceId).filter(Boolean));
     let added=0,duplicates=0;
     for(const item of items) {
       if(known.has(item.sourceArticleId)){duplicates+=1;continue;}
-      result.lorebook.push({...base(),id:item.importId,comment:item.title,content:item.content,folder:folderKey,
-        scenarioLibrarySource:{source:'arca.live',sourceArticleId:item.sourceArticleId,sourceUrl:item.sourceUrl,
-          author:item.author||null,createdAt:item.createdAt||null,isSensitive:Boolean(item.isSensitive),
-          importedAt:new Date().toISOString(),rawHtmlSha256:item.rawHtmlSha256||null}});
+      result.lorebook.push(decorateEntry({...base(),id:'scenario-arca-'+item.sourceArticleId,comment:item.title,
+        content:cleanInput(item.content),folder:folderKey},item,new Date().toISOString()));
       known.add(item.sourceArticleId);added+=1;
     }
+    result.scenarioLibraryCoverage=mergeCoverage(result.scenarioLibraryCoverage,coverage);
     return {module:result,added,duplicates};
   }
   function saveEntry(mod, draft, expected=null) {
@@ -183,6 +208,8 @@
       throw new Error('추가 결과를 확인하지 못했습니다. 채팅을 확인한 뒤 다시 시도해 주세요.');
     return {duplicate:false};
   }
-  root.ScenarioCore = {MODULE_ID, DEFAULTS, clone, folder, folders, entries, cleanInput, seedEntry, hydrateSeed, newModule, suggestTitle, convert, append, validateImport, importEntries, saveEntry, Repository, chatContext, addUserMessage};
+  root.ScenarioCore = {MODULE_ID, DEFAULTS, clone, folder, folders, entries, normalizeCoverage, mergeCoverage, cleanInput,
+    seedEntry,sourceId,sourceMeta,decorateEntry,standardizeModule,hydrateSeed,newModule,suggestTitle,convert,append,validateImport,
+    importEntries,saveEntry,Repository,chatContext,addUserMessage};
   if(typeof module !== 'undefined' && module.exports) module.exports=root.ScenarioCore;
 })(globalThis);

@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { parseFragment } from 'parse5';
+import {cleanContent,categorize,summarize} from './library-transform.mjs';
 
 const API = 'https://arca.live/api/app';
 const BOARD = 'characterai';
@@ -14,6 +15,7 @@ const value = (name, fallback) => {
 };
 const outputDir = resolve(value('--output', 'scenario-library/crawl-output'));
 const manifestInput = value('--manifest', '');
+const indexInput = value('--index', '');
 const maxPosts = Number.parseInt(value('--limit', '0'), 10) || Infinity;
 const listOnly = args.includes('--list-only');
 const delayMin = Number.parseInt(value('--delay-min', '650'), 10);
@@ -83,30 +85,37 @@ function isScenarioCandidate(text) {
   return signals.reduce((score, pattern) => score + Number(pattern.test(text)), 0) >= 2;
 }
 
-async function listArticles() {
+async function listArticles(known = new Set()) {
   const articles = new Map();
   const params = { category: CATEGORY };
-  let page = 0;
+  let page = 0, scanned = 0, newest = null, overlap = 0;
   while (articles.size < maxPosts) {
     const data = await requestJson(`/list/channel/${BOARD}`, params);
     page += 1;
+    let pageKnown = 0;
     for (const article of data.articles || []) {
-      if (article.category === CATEGORY && !articles.has(article.id)) articles.set(article.id, article);
+      if(article.category!==CATEGORY)continue;
+      newest ||= article;scanned += 1;
+      if(known.has(String(article.id))){pageKnown += 1;overlap += 1;continue;}
+      if (!articles.has(article.id)) articles.set(article.id, article);
       if (articles.size >= maxPosts) break;
     }
-    process.stderr.write(`\r목록 ${page}페이지 · ${articles.size}개`);
-    if (!data.next || articles.size >= maxPosts) break;
+    process.stderr.write(`\r목록 ${page}페이지 · 신규 ${articles.size}개 · 기존 ${overlap}개`);
+    if (!data.next || articles.size >= maxPosts || (known.size && pageKnown >= 5)) break;
     Object.assign(params, data.next);
     await politeDelay();
   }
   process.stderr.write('\n');
-  return [...articles.values()].slice(0, maxPosts);
+  return {articles:[...articles.values()].slice(0, maxPosts),pages:page,scanned,overlap,
+    coverage:newest?{source:'arca.live',board:BOARD,category:CATEGORY,scannedAt:new Date().toISOString(),
+      newestArticleId:String(newest.id),newestCreatedAt:newest.createdAt,checkedArticles:scanned}:null};
 }
 
 async function main() {
   await mkdir(outputDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   let listed;
+  let coverage=null,listStats=null;
   let manifestPath;
   if (manifestInput) {
     manifestPath = resolve(manifestInput);
@@ -114,14 +123,20 @@ async function main() {
     if (manifest.board !== BOARD || manifest.category !== CATEGORY || !Array.isArray(manifest.articles)) {
       throw new Error('지정한 목록 파일의 형식이나 게시판이 올바르지 않습니다.');
     }
-    listed = manifest.articles.slice(0, maxPosts);
+    listed = manifest.articles.slice(0, maxPosts);coverage=manifest.coverage||null;
   } else {
-    listed = await listArticles();
+    let known=new Set();
+    if(indexInput){
+      const index=JSON.parse(await readFile(resolve(indexInput),'utf8'));
+      known=new Set((index.articles||[]).map(item=>String(item.sourceArticleId||item.id||'')));
+    }
+    listStats=await listArticles(known);listed=listStats.articles;coverage=listStats.coverage;
     manifestPath = resolve(outputDir, `arcalive-${BOARD}-${stamp}-manifest.json`);
-    await writeFile(manifestPath, JSON.stringify({ board: BOARD, category: CATEGORY, count: listed.length, articles: listed }, null, 2));
+    await writeFile(manifestPath, JSON.stringify({ board: BOARD, category: CATEGORY, count: listed.length,
+      incremental:Boolean(indexInput),pages:listStats.pages,scanned:listStats.scanned,overlap:listStats.overlap,coverage,articles: listed }, null, 2));
   }
   if (listOnly) {
-    console.log(JSON.stringify({ count: listed.length, manifest: manifestPath }, null, 2));
+    console.log(JSON.stringify({ count: listed.length,coverage,manifest: manifestPath }, null, 2));
     return;
   }
 
@@ -172,13 +187,16 @@ async function main() {
   const importPath = resolve(outputDir, `scenario-library-import-${stamp}.json`);
   const importedAt = new Date().toISOString();
   records.sort((a, b) => listed.findIndex((item) => String(item.id) === a.sourceArticleId) - listed.findIndex((item) => String(item.id) === b.sourceArticleId));
-  await writeFile(archivePath, JSON.stringify({ version: 1, board: BOARD, category: CATEGORY, collectedAt: importedAt, records, failures }, null, 2));
+  if(coverage)coverage.scannedAt=importedAt;
+  await writeFile(archivePath, JSON.stringify({ version: 1, board: BOARD, category: CATEGORY, collectedAt: importedAt,coverage,records, failures }, null, 2));
   await writeFile(importPath, JSON.stringify({
     format: 'scenario-library-import',
     version: 1,
     source: 'arca.live',
     collectedAt: importedAt,
-    entries: records.map(({ rawHtml, rawContent, ...record }) => ({ ...record, content: rawContent, selected: record.candidate })),
+    coverage,
+    entries: records.map(({ rawHtml, rawContent, ...record }) => {const content=cleanContent(rawContent);return {...record,content,
+      category:categorize({...record,content}),summary:summarize({...record,content}),selected:record.candidate};}),
   }, null, 2));
   await unlink(partialPath).catch(() => {});
   console.log(JSON.stringify({

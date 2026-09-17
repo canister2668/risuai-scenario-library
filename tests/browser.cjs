@@ -4,9 +4,10 @@ const plugin=fs.readFileSync(path.join(__dirname,'../dist/scenario-library-runti
 const purify=fs.readFileSync(require.resolve('dompurify/dist/purify.min.js'),'utf8');
 assert(plugin.includes('//@version '+require('../package.json').version),'plugin version matches package metadata');
 const packed=JSON.parse(fs.readFileSync(path.join(__dirname,'../dist/scenario-library.storage.json'),'utf8'));
-const storageFixture={'scenario.v2.catalog':JSON.stringify(packed.catalog),...Object.fromEntries(packed.contents.map(x=>[x.key,x.value]))};
-const moduleFixture=structuredClone(packed.catalog),contentFixture=Object.fromEntries(packed.contents.map(x=>[x.key.slice('scenario.v2.content.'.length),x.value]));
-for(const item of moduleFixture.lorebook)if(item.mode!=='folder')item.content=contentFixture[item.id];
+const storageFixture={[packed.key]:JSON.stringify(packed.catalog)};
+const moduleFixture=JSON.parse(fs.readFileSync(path.join(__dirname,'../dist/scenario-library.module.json'),'utf8'));
+const folderNames=new Map(moduleFixture.lorebook.filter(x=>x.mode==='folder').map(x=>[x.key,x.comment]));
+const totalCount=moduleFixture.lorebook.filter(x=>x.mode!=='folder').length,adultCount=moduleFixture.lorebook.filter(x=>x.mode!=='folder'&&folderNames.get(x.folder)==='성인').length;
 const rows=page=>page.locator('.row-item');
 const count=page=>page.locator('.result-count');
 const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.result-count')?.textContent.includes(t),text);
@@ -23,7 +24,7 @@ const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.re
     getDatabase:async()=>{h.dbReads++;return{modules:structuredClone(h.modules)}},setDatabaseLite:async p=>{h.modules=structuredClone(p.modules);},
     getCharacter:async()=>({chaId:h.character}),getCharacterFromIndex:async()=>({chaId:h.character}),getCurrentCharacterIndex:async()=>0,getCurrentChatIndex:async()=>0,
     getChatFromIndex:async()=>structuredClone(h.chat),setChatToIndex:async(a,b,c)=>{h.writes++;h.chat=structuredClone(c)},
-    pluginStorage:{getItem:async k=>{if(k==='scenario.v2.catalog'&&h.delayCatalog)await new Promise(resolve=>h.releaseCatalog=resolve);return storage[k]??null;},setItem:async(k,v)=>{storage[k]=v}},
+    pluginStorage:{getItem:async k=>{if(k==='scenario.v4.catalog'&&h.delayCatalog)await new Promise(resolve=>h.releaseCatalog=resolve);return storage[k]??null;},setItem:async(k,v)=>{storage[k]=v},removeItem:async k=>{delete storage[k]},keys:async()=>Object.keys(storage),length:async()=>Object.keys(storage).length,clear:async()=>{for(const key of Object.keys(storage))delete storage[key]}},
     showContainer:async()=>{h.shows++;document.body.style.display=''},hideContainer:async()=>{h.hides++;document.body.style.display='none'},
     registerButton:async(arg,cb)=>{h.buttonConfig=structuredClone(arg);h.open=cb;return{id:'button'}},registerSetting:async()=>({id:'setting'}),onUnload:async()=>{},unregisterUIPart:async id=>{h.unregistered.push(id)},sendChat:async()=>{h.sends++}
    };
@@ -41,6 +42,7 @@ const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.re
   await page.evaluate(()=>{testHost.delayCatalog=false;testHost.releaseCatalog();document.body.style.display='';testHost.hides=0;});
   await page.getByLabel('상황극 검색').waitFor();
   assert.equal(await page.evaluate(()=>testHost.dbReads),0,'opening uses the cache without cloning the module database');
+  assert.match(await page.getByLabel('상황극 서고 수집 범위').innerText(),/탭 확인 2026-09-17 · 당시 최신 #183252058 \(2026-09-17\) · 저장 532개/);
 
   // Replay the host's own render path: DefaultChatScreen's menu row wrapping PluginDefinedIcon,
   // which sanitises the icon with DOMPurify and confines it to a 20px box. Anything the plugin
@@ -91,7 +93,7 @@ const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.re
   if(width>=700){assert(appBox.width<width&&appBox.height<844,'tablet and desktop use a centered panel');await page.mouse.click(4,4);assert.equal(await page.evaluate(()=>testHost.hides),1,'desktop backdrop closes the panel');await page.evaluate(async()=>{document.body.style.display='';testHost.hides=0;await testHost.open();});await page.getByLabel('상황극 검색').waitFor();}
 
   // The bundled library opens on a short first page and grows on demand.
-  await waitCount(page,'527개 중 30개 표시');
+  await waitCount(page,`${totalCount}개 중 30개 표시`);
   assert.equal(await rows(page).count(),30);
   assert.equal(await page.getByLabel('19금 표시').inputValue(),'all','18+ material is listed by default');
   await noOverflow('list');
@@ -101,22 +103,22 @@ const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.re
   // never swallowed and the header keeps telling the truth about the list.
   const grown=await rows(page).count();
   assert(grown>30&&grown%30===0,'load more appends whole pages: '+grown);
-  assert((await count(page).innerText()).includes(`527개 중 ${grown}개 표시`));
+  assert((await count(page).innerText()).includes(`${totalCount}개 중 ${grown}개 표시`));
   await page.evaluate(()=>{const app=document.querySelector('.app');if(innerWidth>=700)app.scrollTo(0,app.scrollHeight);else scrollTo(0,document.body.scrollHeight);});
   await page.waitForFunction(n=>document.querySelectorAll('.row-item').length>n,grown);
-  assert((await count(page).innerText()).includes(`527개 중 ${await rows(page).count()}개 표시`));
+  assert((await count(page).innerText()).includes(`${totalCount}개 중 ${await rows(page).count()}개 표시`));
   await page.evaluate(()=>{const app=document.querySelector('.app');if(innerWidth>=700)app.scrollTo(0,0);else scrollTo(0,0);});
 
   // The adult filter is a user choice in both directions and never loses entries.
-  await page.getByLabel('19금 표시').selectOption('only');await waitCount(page,'271개');
-  await page.getByLabel('19금 표시').selectOption('hide');await waitCount(page,'256개');
-  await page.getByLabel('19금 표시').selectOption('all');await waitCount(page,'527개');
+  await page.getByLabel('19금 표시').selectOption('only');await waitCount(page,`${adultCount}개`);
+  await page.getByLabel('19금 표시').selectOption('hide');await waitCount(page,`${totalCount-adultCount}개`);
+  await page.getByLabel('19금 표시').selectOption('all');await waitCount(page,`${totalCount}개`);
 
   // Favourites are reachable as their own filter with a live count.
   await page.locator('.star').first().click();
   await page.getByRole('button',{name:/^★ 즐겨찾기/}).click();
   await waitCount(page,'1개 중 1개 표시');
-  await page.getByRole('button',{name:/^전체/}).click();await waitCount(page,'527개');
+  await page.getByRole('button',{name:/^전체/}).click();await waitCount(page,`${totalCount}개`);
 
   await page.getByLabel('상황극 검색').fill('37분');
   await page.locator('.pick').filter({hasText:'37분'}).first().click();
@@ -146,9 +148,10 @@ const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.re
   assert(!converted.includes('{{CHAR}}')&&!converted.includes('{{char}}'));
   assert(converted.includes('Character and Char stay literal.')&&converted.includes('{{charisma}}'),'lookalikes preserved');
   assert.equal(await page.evaluate(()=>window.BAD),undefined);
-  const stored=await page.evaluate(()=>{const catalog=JSON.parse(testHost.storage['scenario.v2.catalog']),item=catalog.lorebook.find(x=>x.comment==='The Unending Authentication'),moduleItem=testHost.modules.find(x=>x.id===catalog.id).lorebook.find(x=>x.id===item.id);return{item,content:testHost.storage['scenario.v2.content.'+item.id],moduleItem};});
-  assert.equal(stored.content,original);assert.equal(stored.item.content,'');
+  const stored=await page.evaluate(()=>{const catalog=JSON.parse(testHost.storage['scenario.v4.catalog']),item=catalog.lorebook.find(x=>x.comment==='The Unending Authentication'),moduleItem=testHost.modules.find(x=>x.id===catalog.id).lorebook.find(x=>x.id===item.id);return{item,moduleItem};});
+  assert.equal(stored.item.content,'');
   assert.equal(stored.moduleItem.content,original,'the module is the canonical full-content store');
+  assert.equal(stored.moduleItem.scenarioLibrarySource,undefined,'stock module carries no plugin-only metadata');
   assert.equal(stored.item.key,'');assert.equal(stored.item.alwaysActive,false);
   await noOverflow('detail');
   await page.screenshot({path:path.join(__dirname,`../artifacts/detail-${width}.png`),fullPage:true});
@@ -200,8 +203,25 @@ const waitCount=(page,text)=>page.waitForFunction(t=>document.querySelector('.re
   await page.getByLabel('상황극 검색').fill('external edit');
   assert.equal(await page.locator('.pick').filter({hasText:'external edit'}).count(),1,'manual module edits refresh into the cache');
 
+  // Storage is a compact metadata cache. Clearing it never touches the module,
+  // and a storage-free installation reconstructs it from the module plus seed.
+  await page.getByRole('button',{name:'더보기 메뉴'}).click();
+  await page.getByRole('button',{name:'저장소 관리'}).click();
+  const storageDialog=page.getByRole('dialog',{name:'플러그인 저장소 관리'});await storageDialog.waitFor();
+  assert((await storageDialog.innerText()).includes('상황극 본문은 모듈에만 저장됩니다.'));
+  const moduleBefore=await page.evaluate(()=>JSON.stringify(testHost.modules.find(x=>x.id==='4e97d516-4b97-45bc-b0b2-1e0cd0a4c34a')));
+  await storageDialog.getByRole('button',{name:'목록 캐시 비우기'}).click();
+  await page.getByRole('button',{name:'캐시 비우기',exact:true}).click();
+  await page.waitForFunction(()=>testHost.storage['scenario.v4.catalog']===undefined);
+  assert.equal(await page.evaluate(()=>testHost.storage['scenario.v4.catalog']),undefined,'cache key is removed');
+  assert.equal(await page.evaluate(()=>JSON.stringify(testHost.modules.find(x=>x.id==='4e97d516-4b97-45bc-b0b2-1e0cd0a4c34a'))),moduleBefore,'cache clear preserves module');
+  await page.getByRole('button',{name:'상황극 탐색기 닫기'}).click();
+  await page.evaluate(()=>testHost.open());await page.getByLabel('상황극 검색').waitFor();
+  assert(await page.evaluate(()=>!!testHost.storage['scenario.v4.catalog']),'missing storage is rebuilt from module and bundled seed');
+  assert.match(await page.getByLabel('상황극 서고 수집 범위').innerText(),/탭 확인 2026-09-17/,'seed restores crawl coverage');
+
   assert.deepEqual(errors,[]);
-  results.push({width,pass:true,checks:['cache-only-open','module-canonical-save','module-cache-refresh','bundled-module-seed','load-more','auto-load-on-scroll','adult-filter-both-ways','favorites','recent','search-summary','save','folder','literal-regex','source-preserved','mobile-overflow','input-card','one-tap-add','no-auto-generation','duplicate-click','mode-memory','concurrent-edit','chat-menu-location','badge-survives-sanitiser','badge-legible-at-20px','chat-menu-row-opens']});
+  results.push({width,pass:true,checks:['cache-only-open','module-canonical-save','module-cache-refresh','bundled-module-seed','compact-storage','cache-clear-preserves-module','storage-free-seed-rebuild','load-more','auto-load-on-scroll','adult-filter-both-ways','favorites','recent','search-summary','save','folder','literal-regex','source-preserved','mobile-overflow','input-card','one-tap-add','no-auto-generation','duplicate-click','mode-memory','concurrent-edit','chat-menu-location','badge-survives-sanitiser','badge-legible-at-20px','chat-menu-row-opens']});
   await page.close();
  }
  fs.writeFileSync(path.join(__dirname,'../artifacts/browser-results.json'),JSON.stringify(results,null,2));console.log(JSON.stringify(results,null,2));

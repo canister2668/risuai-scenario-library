@@ -2,58 +2,84 @@
   'use strict';
   const api = globalThis.risuai || globalThis.Risuai;
   const C = globalThis.ScenarioCore;
-  const CATALOG_KEY='scenario.v2.catalog',CONTENT_PREFIX='scenario.v2.content.';
+  const CATALOG_KEY='scenario.v4.catalog',LEGACY_CATALOG_KEY='scenario.v2.catalog',LEGACY_CONTENT_PREFIX='scenario.v2.content.';
   const ENTRY_ID='scenario-library-chat-entry',LEGACY_ENTRY_ID='scenario-library-entry';
   const ENTRY_BADGE='<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><rect x="2.5" y="2.5" width="19" height="19" rx="5" fill="currentColor" opacity="0.18"/><path d="M5.5 6h5.6c1 0 1.8.8 1.8 1.8v10.4c0-1-.8-1.8-1.8-1.8H5.5z" fill="currentColor"/><path d="M18.5 6h-5.6c-1 0-1.8.8-1.8 1.8v10.4c0-1 .8-1.8 1.8-1.8h5.6z" fill="currentColor" opacity="0.62"/></svg>';
   const parseStored=(raw,fallback)=>{if(raw==null)return fallback;return typeof raw==='string'?JSON.parse(raw):raw;};
-  const stripContent=mod=>{const copy=C.clone(mod);for(const item of C.entries(copy))item.content='';copy.scenarioLibraryStorage='module:canonical;pluginStorage:cache:v3';return copy;};
+  const stripContent=mod=>{const copy=C.clone(mod);for(const item of C.entries(copy))item.content='';return copy;};
   class CatalogRepository {
-    constructor(){this.canonical=new C.Repository(api,SCENARIO_SEED);}
+    constructor(){this.canonical=new C.Repository(api,SCENARIO_SEED);this.catalog=null;this.full=null;
+      this.seedById=new Map((SCENARIO_SEED.entries||[]).map(item=>['scenario-arca-'+item.sourceArticleId,item]));}
     async raw(key){return api.pluginStorage.getItem(key);}
     async read(){
-      const mod=parseStored(await this.raw(CATALOG_KEY),null);
+      const mod=this.catalog||parseStored(await this.raw(CATALOG_KEY),null);
       if(!mod||mod.id!==C.MODULE_ID||!Array.isArray(mod.lorebook))throw new Error('상황극 보관함 목록을 읽지 못했습니다.');
       return C.clone(mod);
     }
     async store(key,value){await api.pluginStorage.setItem(key,typeof value==='string'?value:JSON.stringify(value));}
-    async storeContents(items){
-      for(let i=0;i<items.length;i+=24)await Promise.all(items.slice(i,i+24).map(item=>this.store(CONTENT_PREFIX+item.id,item.content)));
+    decorate(mod,previous=null){
+      const result=stripContent(C.standardizeModule(mod)),old=new Map(C.entries(previous||{lorebook:[]}).map(item=>[item.id,item]));
+      result.scenarioLibraryCoverage=C.mergeCoverage(previous?.scenarioLibraryCoverage,SCENARIO_SEED.coverage);
+      for(const item of C.entries(result)){
+        const prior=old.get(item.id),seed=this.seedById.get(item.id);
+        if(prior?.scenarioLibrarySummary)item.scenarioLibrarySummary=prior.scenarioLibrarySummary;
+        else if(seed?.summary)item.scenarioLibrarySummary=seed.summary;
+        if(prior?.scenarioLibrarySource)item.scenarioLibrarySource=C.clone(prior.scenarioLibrarySource);
+        else if(seed)item.scenarioLibrarySource=C.sourceMeta(seed);
+      }
+      return result;
+    }
+    async removeLegacy(){
+      const keys=await api.pluginStorage.keys();
+      await Promise.all(keys.filter(key=>key===LEGACY_CATALOG_KEY||key.startsWith(LEGACY_CONTENT_PREFIX)).map(key=>api.pluginStorage.removeItem(key)));
     }
     async initialize(){
       const existing=parseStored(await this.raw(CATALOG_KEY),null);
-      if(existing)return this.read();
+      if(existing?.id===C.MODULE_ID&&Array.isArray(existing.lorebook)){this.catalog=existing;await this.removeLegacy();return this.read();}
+      const legacy=parseStored(await this.raw(LEGACY_CATALOG_KEY),null);
+      const installed=await this.canonical.read();
+      if(!installed && !(SCENARIO_SEED.entries||[]).some(item=>String(item.content||'').trim()))
+        throw new Error('상황극 서고 모듈을 먼저 가져온 뒤 다시 열어 주세요. 플러그인에는 본문을 중복 저장하지 않습니다.');
       const seeded=await this.canonical.initialize();
-      await this.rebuildCache(seeded);return this.read();
+      this.full=seeded;this.catalog=this.decorate(seeded,legacy);await this.store(CATALOG_KEY,this.catalog);await this.removeLegacy();return this.read();
     }
     async content(item){
       if(item?.content)return item.content;
-      const raw=await this.raw(CONTENT_PREFIX+item.id);
-      if(typeof raw!=='string')throw new Error('이 상황극의 본문을 읽지 못했습니다.');
-      return raw;
+      this.full||=await this.canonical.read();
+      const found=C.entries(this.full||{lorebook:[]}).find(entry=>entry.id===item.id);
+      if(typeof found?.content!=='string')throw new Error('이 상황극의 본문을 읽지 못했습니다.');
+      return found.content;
     }
     async mutate(transform){
-      let beforeModule=null;
+      let nextCatalog=null;
       const saved=await this.canonical.mutate(mod=>{
         if(!mod)throw new Error('상황극 서고 모듈이 없습니다. 보관함 메뉴에서 모듈을 다시 동기화해 주세요.');
-        beforeModule=C.clone(mod);const next=transform(C.clone(mod));
+        const working=C.clone(mod),metadata=new Map(C.entries(this.catalog||{lorebook:[]}).map(item=>[item.id,item]));
+        working.scenarioLibraryCoverage=this.catalog?.scenarioLibraryCoverage||SCENARIO_SEED.coverage||null;
+        for(const item of C.entries(working)){const old=metadata.get(item.id);if(old?.scenarioLibrarySummary)item.scenarioLibrarySummary=old.scenarioLibrarySummary;if(old?.scenarioLibrarySource)item.scenarioLibrarySource=C.clone(old.scenarioLibrarySource);}
+        const next=transform(working);
         if(!next||next.id!==C.MODULE_ID||!Array.isArray(next.lorebook))throw new Error('보관함 변경 결과가 올바르지 않습니다.');
-        next.scenarioLibraryStorage='module:canonical;pluginStorage:cache:v3';return next;
+        nextCatalog=this.decorate(next,next);return C.standardizeModule(next);
       });
-      const previous=new Map(C.entries(beforeModule).map(item=>[item.id,item]));
-      const changed=C.entries(saved).filter(item=>JSON.stringify(previous.get(item.id))!==JSON.stringify(item));
-      if(changed.length)await this.storeContents(changed);
-      const catalog=stripContent(saved);await this.store(CATALOG_KEY,catalog);return catalog;
+      this.full=saved;this.catalog=this.decorate(saved,nextCatalog);this.catalog.scenarioLibraryCoverage=nextCatalog?.scenarioLibraryCoverage||this.catalog.scenarioLibraryCoverage;
+      await this.store(CATALOG_KEY,this.catalog);return C.clone(this.catalog);
     }
-    async rebuildCache(mod){await this.storeContents(C.entries(mod));await this.store(CATALOG_KEY,stripContent(mod));}
-    async refresh(){const mod=await this.canonical.read();if(!mod)throw new Error('상황극 서고 모듈을 찾지 못했습니다.');await this.rebuildCache(mod);return stripContent(mod);}
+    async refresh(){const mod=await this.canonical.read();if(!mod)throw new Error('상황극 서고 모듈을 찾지 못했습니다.');this.full=mod;this.catalog=this.decorate(mod,this.catalog);await this.store(CATALOG_KEY,this.catalog);return C.clone(this.catalog);}
     async export(){const mod=await this.canonical.read();if(!mod)throw new Error('상황극 서고 모듈을 찾지 못했습니다.');return mod;}
+    async usage(){
+      const keys=await api.pluginStorage.keys(),encoder=new TextEncoder(),rows=[];
+      for(const key of keys){const value=await this.raw(key),serialized=typeof value==='string'?value:JSON.stringify(value);rows.push({key,bytes:encoder.encode(key).length+encoder.encode(serialized||'').length});}
+      return {keys:rows.length,bytes:rows.reduce((sum,row)=>sum+row.bytes,0),catalogBytes:rows.filter(row=>row.key===CATALOG_KEY).reduce((sum,row)=>sum+row.bytes,0),rows};
+    }
+    async clearCache(){await api.pluginStorage.removeItem(CATALOG_KEY);await this.removeLegacy();this.catalog=null;this.full=null;}
+    async clearAll(){await api.pluginStorage.clear();this.catalog=null;this.full=null;}
   }
   const repo = new CatalogRepository();
   const PAGE_STEP = 30;
   const state = {mod:null, prefs:{favorites:[],recent:[],lastFolder:'',sort:'newest',adult:'all',targets:[]},
     context:'none', mode:false,target:'',
     page:'list', filter:'all', query:'', shown:PAGE_STEP, selected:null, draft:null, compose:'', undo:null, busy:false,
-    importItems:null,importQuery:'',importView:'candidates',importSearchBody:false,importPage:0,importFolder:''};
+    importItems:null,importCoverage:null,importQuery:'',importView:'candidates',importSearchBody:false,importPage:0,importFolder:''};
   const registrations=[];
   let pendingAdd=null;
   let preferenceQueue=Promise.resolve(), draftTimer, listObserver=null, lastPage=null;
@@ -239,6 +265,12 @@
     sort.addEventListener('change',()=>{state.prefs.sort=sort.value;state.shown=PAGE_STEP;savePrefs().catch(error);refresh();});
     adult.addEventListener('change',()=>{state.prefs.adult=adult.value;state.shown=PAGE_STEP;savePrefs().catch(error);refresh();});
     root.append(el('div',{class:'toolbar'},count,el('div',{class:'toolbar-controls'},sort,adult)));
+    const coverage=C.normalizeCoverage(state.mod.scenarioLibraryCoverage);
+    const newest=[...all].filter(item=>item.scenarioLibrarySource?.createdAt).sort((a,b)=>Date.parse(b.scenarioLibrarySource.createdAt)-Date.parse(a.scenarioLibrarySource.createdAt))[0];
+    const coverageText=coverage
+      ?`탭 확인 ${coverage.scannedAt.slice(0,10)} · 당시 최신 #${coverage.newestArticleId} (${coverage.newestCreatedAt.slice(0,10)}) · 저장 ${all.length}개`
+      :newest?`저장된 최신 후보 #${newest.scenarioLibrarySource.sourceArticleId} (${newest.scenarioLibrarySource.createdAt.slice(0,10)}) · 탭 전체 확인 기록 없음`:'수집 기록 없음';
+    root.append(el('p',{class:'coverage muted','aria-label':'상황극 서고 수집 범위'},coverageText));
 
     if(state.draft)root.append(el('div',{class:'notice'},'작성 중인 상황극이 있습니다. ',button('이어서 작성',()=>goto('edit'),'link')));
     root.append(list,more);
@@ -320,6 +352,7 @@
       ['JSON 가져오기',chooseImport],
       ['보관함 백업',backup],
       ['모듈에서 새로고침',refreshFromModule],
+      ['저장소 관리',openStorageManager],
       ['보관함 닫기',exitNow],
     ].filter(Boolean);
     const sheet=el('dialog',{class:'dialog sheet','aria-label':'보관함 메뉴'});
@@ -530,6 +563,23 @@
     const a=el('a',{download:'scenario-library-backup.json'}),url=URL.createObjectURL(new Blob([JSON.stringify(mod,null,2)],{type:'application/json'}));a.href=url;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),3000);toast('보관함 JSON 백업을 다운로드합니다.');
   }
   async function refreshFromModule(){state.mod=await repo.refresh();state.shown=PAGE_STEP;state.selected=null;state.page='list';render();toast('상황극 서고 모듈에서 목록과 본문 캐시를 새로 읽었습니다.');}
+  const formatBytes=bytes=>bytes<1024?`${bytes} B`:bytes<1024*1024?`${(bytes/1024).toFixed(1)} KB`:`${(bytes/1024/1024).toFixed(2)} MB`;
+  async function openStorageManager(){
+    const usage=await repo.usage(),dialog=el('dialog',{class:'dialog storage-dialog','aria-label':'플러그인 저장소 관리'});
+    const close=()=>dialog.close();
+    const cache=async()=>{if(!await confirmAction('목록 캐시를 비울까요? 모듈은 그대로이며 다음 실행 때 자동으로 복구됩니다.','캐시 비우기'))return;
+      await repo.clearCache();close();toast('목록 캐시를 비웠습니다. 다음 실행 때 자동 복구됩니다.');};
+    const all=async()=>{if(!await confirmAction('즐겨찾기·최근 기록·초안·대상 이름과 캐시를 모두 비울까요? 상황극 서고 모듈은 삭제되지 않습니다.','전체 비우기'))return;
+      await repo.clearAll();state.prefs={favorites:[],recent:[],lastFolder:'',sort:'newest',adult:'all',targets:[]};state.draft=null;close();toast('플러그인 저장소를 비웠습니다. 모듈은 그대로 보존됩니다.');render();};
+    dialog.append(el('h2',{},'플러그인 저장소'),
+      el('div',{class:'storage-meter'},el('strong',{},formatBytes(usage.bytes)),el('span',{class:'muted'},`${usage.keys}개 항목`)),
+      el('dl',{class:'storage-breakdown'},el('div',{},el('dt',{},'목록·출처 메타데이터'),el('dd',{},formatBytes(usage.catalogBytes))),
+        el('div',{},el('dt',{},'환경설정·초안 등'),el('dd',{},formatBytes(Math.max(0,usage.bytes-usage.catalogBytes))))),
+      el('p',{class:'notice'},'상황극 본문은 모듈에만 저장됩니다. 캐시를 비워도 모듈은 삭제되지 않으며, 내장 seed와 모듈에서 목록·출처 정보가 다시 만들어집니다.'),
+      el('div',{class:'storage-actions'},button('목록 캐시 비우기',cache),button('설정 포함 전체 비우기',all,'danger')),
+      el('div',{class:'row end'},button('닫기',close,'primary')));
+    dialog.addEventListener('close',()=>dialog.remove());document.body.append(dialog);dialog.showModal();
+  }
 
   /* ---------- bulk import ---------- */
   async function chooseImport(){
@@ -539,6 +589,7 @@
       if(file.size>80*1024*1024)throw new Error('가져오기 파일은 80MB 이하여야 합니다. 원문 아카이브가 아닌 import 파일을 골라 주세요.');
       const parsed=JSON.parse(await file.text());
       state.importItems=C.validateImport(parsed).map(item=>({...item,importId:crypto.randomUUID()}));
+      state.importCoverage=C.normalizeCoverage(parsed.coverage);
       let folder=C.folders(state.mod).find(item=>item.comment==='아카 가져오기');
       if(!folder){
         folder=C.folder('아카 가져오기',crypto.randomUUID());
@@ -551,7 +602,7 @@
   }
   function renderImport(){
     if(!state.importItems){goto('list');return;}
-    root.append(shell('일괄 가져오기',iconButton('←','취소',()=>{state.importItems=null;goto('list');},'back'),[exitButton()]));
+    root.append(shell('일괄 가져오기',iconButton('←','취소',()=>{state.importItems=null;state.importCoverage=null;goto('list');},'back'),[exitButton()]));
     root.append(errorBox);
     const pageSize=50;
     const query=el('input',{type:'search',placeholder:'제목으로 검색','aria-label':'가져오기 검색'});query.value=state.importQuery;
@@ -595,16 +646,16 @@
     for(const folder of C.folders(state.mod)){const option=el('option',{value:folder.key},folder.comment);option.selected=folder.key===state.importFolder;foldersSelect.append(option);}
     foldersSelect.addEventListener('change',()=>{state.importFolder=foldersSelect.value;});
     const commit=async()=>{
-      const chosen=state.importItems.filter(item=>item.selected);if(!chosen.length)throw new Error('가져올 글을 하나 이상 선택해 주세요.');
+      const chosen=state.importItems.filter(item=>item.selected);if(!chosen.length&&!state.importCoverage)throw new Error('가져올 글을 하나 이상 선택해 주세요.');
       if(chosen.length>100&&!await confirmAction(`${chosen.length}개를 모듈에 가져올까요? 저장 용량이 커질 수 있습니다.`,'가져오기'))return;
       let report;
-      state.mod=await repo.mutate(mod=>{if(!mod)throw new Error('보관함을 다시 열어 주세요.');report=C.importEntries(mod,chosen,state.importFolder);return report.module;});
-      state.filter=state.importFolder;state.importItems=null;state.shown=PAGE_STEP;goto('list');toast(`${report.added}개를 가져왔습니다. 중복 ${report.duplicates}개는 건너뛰었습니다.`);
+      state.mod=await repo.mutate(mod=>{if(!mod)throw new Error('보관함을 다시 열어 주세요.');report=C.importEntries(mod,chosen,state.importFolder,state.importCoverage);return report.module;});
+      state.filter=state.importFolder;state.importItems=null;state.importCoverage=null;state.shown=PAGE_STEP;goto('list');toast(`${report.added}개를 가져왔습니다. 중복 ${report.duplicates}개는 건너뛰었습니다.`);
     };
     root.append(el('section',{class:'panel'},
       el('p',{class:'notice'},'상황극 후보만 기본 선택되어 있습니다. 제목과 내용을 확인한 뒤 저장할 항목을 고르세요.'),tabs,
       el('div',{class:'search-row'},query,bodySearch),el('div',{class:'batch-row'},selectVisible,clearVisible),count,list,pager,label('저장할 폴더',foldersSelect)));
-    root.append(el('footer',{class:'bar'},button('선택한 글 가져오기',commit,'primary')));
+    root.append(el('footer',{class:'bar'},button(state.importCoverage?'선택 반영 및 수집 기준 저장':'선택한 글 가져오기',commit,'primary')));
   }
   function previewImport(item){
     const dialog=el('dialog',{class:'dialog import-preview'}),source=el('a',{href:item.sourceUrl,target:'_blank',rel:'noopener noreferrer'},'원문 열기');

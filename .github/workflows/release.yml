@@ -46,7 +46,7 @@ jobs:
         shell: bash
         run: |
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" release/scenario-library.plugin.js release/SHA256SUMS --clobber
+            gh release upload "${GITHUB_REF_NAME}" release/scenario-library.plugin.js release/scenario-library.module.json release/SHA256SUMS --clobber
           else
-            gh release create "${GITHUB_REF_NAME}" release/scenario-library.plugin.js release/SHA256SUMS --verify-tag --generate-notes --title "상황극 탐색기 ${GITHUB_REF_NAME}"
+            gh release create "${GITHUB_REF_NAME}" release/scenario-library.plugin.js release/scenario-library.module.json release/SHA256SUMS --verify-tag --generate-notes --title "상황극 탐색기 ${GITHUB_REF_NAME}"
           fi

@@ -45,3 +45,18 @@ test('the distributable uses only declared stock API v3 surfaces',()=>{
   assert.match(plugin,/\/\/@update-url https:\/\/raw\.githubusercontent\.com\/canister2668\/risuai-scenario-library\/main\/update\/scenario-library\.plugin\.js\n/);
   assert.equal(plugin,fs.readFileSync(path.join(root,'update','scenario-library.plugin.js'),'utf8'));
 });
+
+test('release module stays stock-only and synchronized storage stays compact',()=>{
+  const module=JSON.parse(fs.readFileSync(path.join(root,'dist','scenario-library.module.json'),'utf8'));
+  const seed=JSON.parse(fs.readFileSync(path.join(root,'src','seed.json'),'utf8'));
+  const entries=module.lorebook.filter(item=>item.mode!=='folder');
+  const allowed=['alwaysActive','bookVersion','comment','content','folder','id','insertorder','key','mode','secondkey','selective'].sort();
+  assert.equal(entries.length,seed.count);
+  for(const entry of entries)assert.deepEqual(Object.keys(entry).sort(),allowed);
+  assert.equal(Object.keys(module).some(key=>key.startsWith('scenarioLibrary')),false);
+  const storage=JSON.parse(fs.readFileSync(path.join(root,'dist','scenario-library.storage.json'),'utf8'));
+  assert.equal(storage.key,'scenario.v4.catalog');
+  assert.equal(storage.catalog.lorebook.filter(item=>item.mode!=='folder').length,seed.count);
+  assert(fs.statSync(path.join(root,'dist','scenario-library.storage.json')).size<512*1024,'metadata cache must stay below 512 KiB');
+  assert(fs.statSync(path.join(root,'dist','scenario-library.plugin.js')).size<512*1024,'normal plugin must not bundle module bodies');
+});

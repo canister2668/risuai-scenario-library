@@ -5,6 +5,7 @@ crawl-smoke/
 crawl-smoke-body/
 production-backups/
 release/
+maintenance/inbox/
 dist/
 reference/*-0-0.lua
 reference/[0-9a-f]*.json

@@ -7,7 +7,10 @@
     "build": "node build.cjs",
     "test": "node --test tests/core.test.cjs tests/upstream-contract.test.cjs",
     "test:browser": "node tests/browser.cjs && node tests/full-import.cjs",
-    "release:prepare": "node tools/prepare-release.cjs"
+    "release:prepare": "node tools/prepare-release.cjs",
+    "maintenance:status": "node tools/scenario-status.mjs",
+    "maintenance:check": "node tools/crawl-arcalive.mjs --index maintenance/arcalive-index.json --output maintenance/inbox",
+    "maintenance:merge": "node tools/merge-maintenance-import.mjs"
   },
   "devDependencies": {
     "dompurify": "3.4.14",

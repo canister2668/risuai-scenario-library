@@ -74,6 +74,7 @@ button.icon:hover{background:#2a2435}
 .toolbar-controls{display:flex;gap:7px;margin-left:auto;flex:none}
 select.mini{width:auto;min-height:40px;padding:6px 8px;font-size:13px;border-radius:10px;background:#221e2d}
 .result-count{font-variant-numeric:tabular-nums;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.coverage{margin:0 14px 8px;font-size:.78rem}
 
 /* ---- library list ---- */
 .list{display:flex;flex-direction:column;border-top:1px solid var(--line)}
@@ -155,6 +156,16 @@ select.mini{width:auto;min-height:40px;padding:6px 8px;font-size:13px;border-rad
 .sheet-body button.link{text-align:center;background:none}
 .import-preview{max-width:760px}
 .import-preview>.preview{max-height:52dvh}
+.storage-dialog{max-width:520px}
+.storage-meter{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--raised)}
+.storage-meter strong{font-size:25px}
+.storage-breakdown{display:grid;gap:8px;margin:0}
+.storage-breakdown>div{display:flex;justify-content:space-between;gap:14px}
+.storage-breakdown dt{color:var(--dim)}
+.storage-breakdown dd{margin:0;font-variant-numeric:tabular-nums}
+.storage-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.danger{border-color:#8d4a57;color:#ffd5dc;background:#3b2229}
+.danger:hover{background:#512b35}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);max-width:calc(100% - 32px);
   background:#e7d7ff;color:#281838;padding:12px 20px;border-radius:12px;box-shadow:0 6px 24px #0007;z-index:10;font-size:14px}
 
@@ -213,5 +224,6 @@ select.mini{width:auto;min-height:40px;padding:6px 8px;font-size:13px;border-rad
   .seg{grid-template-columns:1fr}
   .seg-option{min-height:52px}
   .bar>.primary{min-width:120px}
+  .storage-actions{grid-template-columns:1fr}
 }
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
